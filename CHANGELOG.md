@@ -11,126 +11,101 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/), wersje wg [Sem
 komenda: `npm run bump -- X.Y.Z`.
 
 **Jak piszemy wpisy:** wpis jest krótki i mówi tylko o tym, co zmieniło się
-w aplikacji, czyli o funkcjach i poprawkach widocznych na ekranie. Nie opisujemy
-w nim testów, skryptów wydania ani porządków w kodzie, nie powtarzamy zmian
-z wcześniejszych wersji i nie odnotowujemy samego podbicia numeru (miejsca
-z numerem opisuje akapit wyżej). Opis wydania na GitHubie powstaje z tego wpisu:
-`npm run notes` (`scripts/release-notes.js`) bierze z changeloga tylko sekcję
-wydawanej wersji.
+w aplikacji, czyli o funkcjach i poprawkach widocznych na ekranie. Każdy punkt
+to jedna zmiana i jedno zdanie — nagłówek zmiany po myślniku plus tyle opisu,
+ile trzeba, żeby zrozumieć różnicę (punkt rozdmuchany w akapit przestaje się
+czytać, tak wyszło w 2.0.2 i 2.0.3). Nie opisujemy w nim testów, skryptów
+wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
+i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
+wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
+(`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+
+## [2.0.4] — 2026-10-04
+
+### Poprawiono
+- **W nagłówku listy kanałów jest logo aplikacji** — zamiast dawnego znaczka
+  (monitor z antenką) widać ten sam biały telewizor z napisem IPTV, co na ikonie
+  w launcherze.
 
 ## [2.0.3] — 2026-10-04
 
 ### Poprawiono
-- **Kanał 4K wczytuje się bez restartów.** Odtwarzanie dostawało sztywny czas na
-  start — 6 s na pierwsze klatki, 9 s na dźwięk — a kanał 4K potrzebuje na to
-  znacznie więcej. Po przekroczeniu czasu aplikacja przerywała wczytywanie
-  i zaczynała od nowa, więc obrazu nie było, a kanał „co chwila ładuje”. Teraz
-  jedna próba dostaje 30 s (4K) albo 45 s (kanał, który jeszcze się łączy)
-  i jest przedłużana, dopóki strumień naprawdę coś dociąga; dopiero cisza
-  w strumieniu kończy próbę i oddaje kolejkę następnemu sposobowi odtwarzania.
-  SD i HD działają jak dotąd, a wymuszona warstwa obrazu nie jest już włączana
-  przy 4K.
-- **Zegar w rogu obrazu jest mniej widoczny.** Mniejszy napis na przygaszonym
-  tle, bez mocnej obwódki — ma być podpowiedzią, a nie konkurencją dla obrazu.
-- **Szybkie „OK, ▼” pokazuje menu, a nie zmienia kanału.** Pilot wysyła strzałkę,
-  zanim dotrze informacja o puszczeniu OK, więc ▼ trafiało w zmianę kanału,
-  a nie w menu paska. Teraz zakończenie trzymania OK rozstrzyga się od razu:
-  pasek otwiera się jako menu, a ▼ wchodzi w jego przyciski. Gdy pasek jest
-  wyłączony w ustawieniach, ▼ dalej przełącza kanały.
+- **Kanał 4K wczytuje się bez restartów** — jedna próba startu dostaje teraz
+  30 s (4K) albo 45 s (kanał, który jeszcze się łączy), a koniec wyznacza cisza
+  w strumieniu, nie sztywne 6–9 s.
+- **Zegar w rogu obrazu jest mniej widoczny** — mniejszy napis na przygaszonym
+  tle i bez mocnej obwódki, żeby nie konkurował z obrazem.
+- **Szybkie „OK, ▼” otwiera menu paska, a nie zmienia kanału** — koniec
+  trzymania `OK` rozstrzyga się od razu, więc `▼` wchodzi w przyciski paska,
+  a przy pasku wyłączonym w ustawieniach dalej przełącza kanały.
 
 ## [2.0.2] — 2026-10-03
 
 ### Poprawiono
-- **Program TV nie zamraża aplikacji.** Rozpakowanie EPG (to potrafi być
-  kilkadziesiąt megabajtów) dzieje się poza głównym wątkiem, więc lista kanałów
-  i pilot odpowiadają od razu; gdy się nie uda, jest komunikat, a nie pusty
-  program.
-- **Program TV przewija się równo i mieści się na ekranie.** Siatka nie drga
-  przy dojeżdżaniu fokusem, nie ucieka za prawą krawędź i rysuje tylko widoczne
-  kanały. Po zmianie dnia zostaje pod fokusem ten sam kanał i program, na tym
-  samym miejscu ekranu.
-- **Czarny obraz z dźwiękiem sam się naprawia.** Aplikacja wymusza warstwę
-  obrazu, powtarza ten sam kanał, a potem próbuje kolejnego sposobu odtwarzania
-  — z komunikatem, co się stało. Sposób, który dał obraz, pamięta na potem.
+- **Program TV nie zamraża aplikacji** — rozpakowanie EPG dzieje się poza
+  głównym wątkiem, więc lista kanałów i pilot odpowiadają od razu.
+- **Program TV przewija się równo i mieści się na ekranie** — siatka nie drga
+  przy dojeżdżaniu fokusem i rysuje tylko widoczne kanały.
+- **Po zmianie dnia zostaje pod fokusem ten sam kanał i program**, na tym samym
+  miejscu ekranu.
+- **Czarny obraz z dźwiękiem sam się naprawia** — aplikacja wymusza warstwę
+  obrazu, powtarza kanał, a potem próbuje kolejnego sposobu odtwarzania
+  i pamięta ten, który dał obraz.
 - **Obwódka fokusu jest pojedyncza** — na kafelku kanału i na pigułce kategorii,
   zamiast dwóch jedna na drugiej.
-- **Nagłówek programu TV jest znowu czysty.** Legenda pilota to tekst, a nie
-  ikona: ikonę rysowaliśmy też napisom poza przyciskami, a bez rozmiaru
-  z reguł przycisku rozciągała się na całą szerokość nagłówka.
+- **Nagłówek programu TV jest znowu czysty** — legenda pilota to tekst, a nie
+  ikona rozciągana na całą szerokość nagłówka.
 
 ## [2.0.1] — 2026-10-03
 
 ### Zmieniono
-- **Nowe logo aplikacji.** Zamiast trójkąta „play” z falami jest biały telewizor
-  z napisem **IPTV** na ekranie. Wszystkie ikony powstają z jednego wzoru —
-  ikona w launcherze (zwykła, okrągła i adaptacyjna na Androidzie 8+), ikona
-  w pasku aplikacji webOS i ekran startowy Androida — więc znak wygląda wszędzie
-  tak samo. Napis jest konturem, a nie tekstem, więc nie zależy od czcionek
-  w telewizorze.
-- **Karta do udostępniania linku.** Po wklejeniu adresu strony na Facebooka, X-a
-  albo WhatsAppa widać grafikę z logo, nazwą i opisem aplikacji, a nie pusty
-  prostokąt.
+- **Nowe logo aplikacji** — zamiast trójkąta „play” z falami jest biały
+  telewizor z napisem **IPTV** na ekranie, a ikona w launcherze, ikona w pasku
+  aplikacji webOS i ekran startowy Androida powstają z jednego wzoru, więc znak
+  wygląda wszędzie tak samo.
+- **Karta do udostępniania linku** — po wklejeniu adresu strony na Facebooka,
+  X-a albo WhatsAppa widać grafikę z logo, nazwą i opisem aplikacji.
 
 ## [2.0.0] — 2026-10-03
 
 ### Dodano
-- **Zegar w rogu obrazu.** W Ustawieniach (zakładka „Ogólne”) jest przełącznik
-  „Zegar w rogu obrazu”: podczas oglądania programu w lewym górnym rogu pokazuje
-  się godzina w formacie `HH:MM`. Poza obrazem — na liście kanałów, w programie TV
-  i w ustawieniach — zegara nie ma. Jest wyłączony, dopóki nie włączy go sam
-  użytkownik, więc wygląd odtwarzacza nie zmienia się nikomu bez pytania.
-- **Program TV wypełnia ekran i pokazuje wszystkie kanały.** Oś czasu bierze
-  teraz tyle godzin, ile mieści się na szerokości ekranu (3–6), a siatka rysuje
-  tylko wiersze widoczne na obrazie — reszta kanałów czeka w tle, więc nawet
-  5000 kanałów w kategorii przewija się płynnie. Dawniej lista urywała się na 60
-  kanałach („pokazano 60 z …”), a teraz podpis podaje ich liczbę („kanałów: 245”).
-- **Kafelki programu są czytelniejsze.** Wiersz jest wyższy, tytuł łamie się na
-  dwie linie zamiast kończyć wielokropkiem, pełna nazwa kanału mieści się
-  w kolumnie, a program, który leci teraz, ma u dołu pasek postępu pokazujący,
-  ile jeszcze zostało.
-- **Komunikat o przewinięciu widać na środku obrazu.** Po skoku (`◀` `▶`, `⏪` `⏩`)
-  informacja „Cofnięto o 10 s” / „Przesunięto o +10 s” pojawia się na środku
-  wideo — dawniej była tylko na pasku, który po chwili sam znikał, więc przy
-  przewijaniu zostawał sam obraz bez śladu tego, co się stało.
+- **Zegar w rogu obrazu** — przełącznik w ustawieniach pokazuje podczas
+  oglądania godzinę `HH:MM` w lewym górnym rogu, a domyślnie jest wyłączony.
+- **Program TV wypełnia ekran i pokazuje wszystkie kanały** — oś czasu bierze
+  tyle godzin, ile mieści się na szerokości ekranu (3–6), a siatka rysuje tylko
+  widoczne wiersze.
+- **Kafelki programu są czytelniejsze** — wyższy wiersz, tytuł łamie się na dwie
+  linie, pełna nazwa kanału mieści się w kolumnie, a program, który leci teraz,
+  ma u dołu pasek postępu.
+- **Komunikat o przewinięciu widać na środku obrazu** — po skoku
+  (`◀` `▶`, `⏪` `⏩`) informacja „Cofnięto o 10 s” zostaje na obrazie, a nie
+  tylko na pasku, który po chwili znika.
 
 ### Zmieniono
-- **Aplikacja nazywa się TeleIPTV.** Nowa nazwa jest wszędzie: na ekranie
-  startowym, w tytule okna, pod listą kanałów, w pytaniu o wyjście, w komunikatach
-  o aktualizacji, w nazwach paczek (`TeleIPTV-<wersja>.apk` oraz `.ipk`) i na
-  stronie projektu. Tożsamość paczki (`pl.openiptv.player`) zostaje bez zmian,
-  więc nowa wersja wchodzi jako aktualizacja poprzedniej — profile, ustawienia
-  i ulubione zostają na miejscu. Aplikacja rozpoznaje przy okazji paczki ze
-  starszych wydań (`OpenIPTV-<wersja>.apk`), żeby aktualizacja z telewizora
-  dalej działała.
-- **Strona projektu jest przygotowana pod wyszukiwarki.** Tytuł i opis strony,
-  dane dla wyszukiwarek i mapa strony mówią wprost, co to za aplikacja, na czym
-  chodzi (LG webOS, Android TV, Google TV, Fire TV) i co potrafi, a na dole są
-  najczęstsze pytania — żeby dało się ją znaleźć w Google po nazwie albo po tym,
-  czego się szuka.
-- **Pasek dnia jest mniejszy.** Przyciski `‹ Dzień`, `Przedwczoraj`, `Wczoraj`,
-  `Dziś`, `Dzień ›`, pola daty i godziny oraz `Wstecz` mieszczą się w jednej
-  linii, więc siatce zostaje więcej miejsca.
+- **Aplikacja nazywa się TeleIPTV** — nowa nazwa jest na ekranie startowym,
+  w tytule okna, pod listą kanałów, w pytaniu o wyjście, w nazwach paczek
+  i na stronie projektu, a tożsamość paczki (`pl.openiptv.player`) zostaje bez
+  zmian, więc aktualizacja zachowuje profile, ustawienia i ulubione.
+- **Strona projektu jest przygotowana pod wyszukiwarki** — tytuł, opis, dane dla
+  wyszukiwarek i mapa strony mówią wprost, co to za aplikacja, na czym chodzi
+  (LG webOS, Android TV, Google TV, Fire TV) i co potrafi.
+- **Pasek dnia jest mniejszy** — przyciski dni, pola daty i godziny oraz
+  `Wstecz` mieszczą się w jednej linii, więc siatce zostaje więcej miejsca.
 - **Programy zakończone są przygaszone tylko wtedy, gdy nie ma ich skąd
-  odtworzyć.** Materiał dostępny w archiwum jest wyraźny, więc od razu widać, co
-  da się cofnąć.
+  odtworzyć**, więc materiał z archiwum jest wyraźny.
 
 ### Naprawiono
-- **Uruchomienie aplikacji nie zamarza.** Program TV pobierał się i parsował
-  zaraz po wczytaniu listy kanałów — w tym samym momencie, w którym rysował się
-  ekran. Teraz rusza dopiero wtedy, gdy lista kanałów jest gotowa i pilot ma
-  fokus.
-- **Przewinięcie osi czasu i obrót ekranu nie gubią kanału pod fokusem.** Po
+- **Uruchomienie aplikacji nie zamarza** — program TV rusza dopiero wtedy, gdy
+  lista kanałów jest gotowa i pilot ma fokus, a nie w tym samym momencie,
+  w którym rysuje się ekran.
+- **Przewinięcie osi czasu i obrót ekranu nie gubią kanału pod fokusem** — po
   zmianie dnia albo godzin zostaje ten sam kanał, a po obrocie ekranu godziny
-  liczą się na nowo, żeby siatka dalej wypełniała szerokość.
-- **Pasek otwarty klawiszem `OK` obsługuje się strzałkami.** Pierwsze `▲` `▼`
-  wchodzi w jego przyciski (`⏸ Pauza`, `📅 EPG`…), a `◀` `▶` chodzą po nich —
-  dawniej `▼` przełączało kanał, więc do przycisków paska nie dało się dojść
-  pilotem. Z paska wychodzi się `▲` `▼` albo `Wstecz`, który najpierw zamyka
-  pasek, a dopiero potem wychodzi z kanału; pasek pokazany przy zmianie kanału
-  zostaje informacją, więc `▲` `▼` dalej zmieniają kanały jedno po drugim.
-- **Menu opcji kanału nad obrazem działa z pilota.** Strzałki chodzą po jego
-  pozycjach, a `OK` wybiera podświetloną — wcześniej w odtwarzaczu `▲` `▼`
-  przełączały kanał, a `OK` otwierało pasek zamiast wybrać pozycję z menu.
+  liczą się na nowo.
+- **Pasek otwarty klawiszem `OK` obsługuje się strzałkami** — `▲` `▼` wchodzą
+  w jego przyciski, `Wstecz` najpierw zamyka pasek, a pasek pokazany przy
+  zmianie kanału zostaje informacją, więc `▲` `▼` dalej zmieniają kanały.
+- **Menu opcji kanału nad obrazem działa z pilota** — strzałki chodzą po jego
+  pozycjach, a `OK` wybiera podświetloną.
 
 ## [1.21.7] — 2026-10-03
 

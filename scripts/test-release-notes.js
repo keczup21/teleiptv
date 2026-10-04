@@ -117,6 +117,57 @@ check("npm run notes uruchamia generator",
 check("npm test uruchamia test:notes",
   typeof scripts.test === "string" && scripts.test.indexOf("test:notes") > 0, scripts.test);
 
+/* --- 9. kazdy punkt wpisu to jedno zdanie ------------------------------- */
+/* Wpisy 2.0.x sa krotkie: naglowek zmiany po myslniku i jedno zdanie opisu.
+   Punkt rozdmuchany w akapit (tak wyszlo w 2.0.2 i 2.0.3) przestaje sie czytac,
+   dlatego pilnuje tego ten test. Starsze wpisy zostaja, jakie sa - opisuja
+   wydania, ktore juz poszly. */
+const SHORT_FROM = "2.0.0";
+/* Skroty konczace sie kropka nie licza sie jako koniec zdania. */
+const ABBR = new Set(["np", "tzn", "tj", "itd", "itp", "m.in", "ok", "godz",
+  "zob", "por", "wl", "wł", "ur", "nr", "s", "min", "pkt", "tzw", "zł"]);
+
+function versionValue(version) {
+  return version.split(".").reduce(function (sum, part) {
+    return sum * 1000 + Number(part);
+  }, 0);
+}
+
+/* Zdania liczymy po kropkach, wykrzyknikach i pytajnikach, ktore koncza slowo -
+   kropka w adresie (github.com), w numerze wersji (2.0.4) albo w skrocie
+   (np., 6-9 s.) zdania nie konczy. */
+function sentenceCount(text) {
+  const re = /(\S+?)([.!?])(?=\s|$)/g;
+  let count = 0;
+  let found;
+  while ((found = re.exec(text)) !== null) {
+    const word = found[1].toLowerCase().replace(/[^a-z0-9ąćęłńóśźż.]/g, "");
+    if (ABBR.has(word)) continue;
+    count++;
+  }
+  return count;
+}
+
+/* Punkt z changeloga: linia zaczynajaca sie od "- " plus jej zawiniete linie */
+function bulletTexts(section) {
+  return section.split("\r\n").reduce(function (acc, line) {
+    if (/^- /.test(line)) acc.push(line.slice(2));
+    else if (acc.length && /^\s+\S/.test(line)) acc[acc.length - 1] += " " + line.trim();
+    return acc;
+  }, []);
+}
+
+const longBullets = [];
+versions.forEach(function (version) {
+  if (versionValue(version) < versionValue(SHORT_FROM)) return;
+  bulletTexts(notes.sectionFor(changelog, version)).forEach(function (text) {
+    const plain = text.replace(/[*`]/g, "");
+    if (sentenceCount(plain) > 1) longBullets.push(version + ": " + plain.slice(0, 70));
+  });
+});
+check("kazdy punkt wpisu od 2.0.0 to jedno zdanie (bez akapitow)",
+  longBullets.length === 0, longBullets.join(" | "));
+
 console.log("");
 console.log(fails ? "BŁĘDY: " + fails : "Opis wydania zawiera tylko wydawaną wersję.");
 process.exit(fails ? 1 : 0);

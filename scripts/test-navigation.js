@@ -369,6 +369,20 @@ check("napis z ikona poza przyciskiem zostaje tekstem (legenda pilota)",
   html.indexOf('<span id="guidePanHint"') > 0 &&
   icons.iconForLabel("◀ ▶ — przewijanie godzin • ▲ ▼ — kanały") === "prev");
 
+/* Naglowek listy mial jeszcze dawny znaczek (monitor z antenka), mimo ze od
+   2.0.1 obowiazuje nowe logo, a od 2.0.4 ma byc takze tutaj. Logo w naglowku
+   to ten sam plik, z ktorego powstaje ikona w launcherze (www/icon.svg), wiec
+   znak nie rozjedzie sie znowu z tym, co widac na telewizorze. */
+const brandAt = html.indexOf('<div class="brand">');
+const brand = html.slice(brandAt, html.indexOf("<nav>", brandAt));
+check("naglowek listy ma logo aplikacji (www/icon.svg), a nie dawny znaczek z antenka",
+  brand.indexOf('<img class="brand-logo" src="icon.svg"') > 0 && brand.indexOf("<svg") < 0,
+  brand.slice(0, 80));
+check("dawny znaczek z antenka zniknal z index.html",
+  html.indexOf("m17 2-5 5-5-5") < 0);
+check("logo w naglowku bierze rozmiar z arkusza, wiec nie rozciaga sie na naglowek",
+  css.indexOf(".brand-logo { flex: none; width: 40px; height: 40px; }") > 0);
+
 /* <option> nie moze dostac elementu potomnego, wiec zaden napis z ikona nie
    moze byc uzyty w liscie wyboru — inaczej pozycja zostalaby pusta */
 const optionKeys = (html.match(/<option[^>]*data-i18n="([a-z_0-9]+)"/g) || [])

@@ -116,7 +116,7 @@ header {
   background: var(--header-bg);
 }
 .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.brand-logo { flex: none; color: var(--accent); }
+.brand-logo { flex: none; width: 40px; height: 40px; }
 header strong { font-size: 28px; font-weight: 700; letter-spacing: .2px; }
 header span { display: block; margin-top: 5px; color: var(--muted); font-size: 16px; }
 header nav { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
