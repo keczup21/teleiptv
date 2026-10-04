@@ -1584,6 +1584,17 @@ check("uruchomione: SD/HD bez obrazu idzie do naprawy warstwy bez zwloki (jak w 
   ph.calls.next.length === 0,
   JSON.stringify({ classes: ph.classes, next: ph.calls.next }));
 
+/* 4K z samym dzwiekiem: wymiary klatki (videoWidth/videoHeight) sa jedynym
+   sygnalem zarowno obrazu, jak i 4K — majac je, budzik uznaje, ze obraz jest.
+   4K bez obrazu ma wiec wymiary zerowe i idzie ta sama droga co SD/HD (naprawa
+   warstwy obrazu, sprawdzone nizej) — dlatego nie ma tu osobnego wyjatku. */
+ph = pictureHarness({ uhd: true, nowMs: NOW4K, waitStart: NOW4K - 40000, activity: NOW4K - 500 });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: 4K z wymiarami klatki jest dla budzika obrazem (nic nie zmienia)",
+  ph.classes.length === 0 && ph.calls.next.length === 0 && ph.calls.started.length === 0,
+  JSON.stringify({ classes: ph.classes, next: ph.calls.next }));
+
 /* zapamietany tryb idzie na poczatek kolejki nastepnego kanalu */
 const queueStart = src.indexOf("function buildSourceQueue(primaryUrl)");
 const queueEnd = src.indexOf("function startSourceEntry(");
@@ -1607,13 +1618,43 @@ check("uruchomione: zapamietany MSE idzie na poczatek kolejki nastepnego kanalu"
   qMse.map(function (e) { return e.engine; }).indexOf("native") === 1,
   JSON.stringify(qMse.map(function (e) { return e.engine; })));
 queueBox.settings.engineHint = "hls";
-check("uruchomione: to samo dla HLS (kanal .m3u8 i .ts)",
-  engines("http://s/x.m3u8")[0] === "hls" && engines("http://s/x.ts")[0] === "hls",
-  JSON.stringify([engines("http://s/x.m3u8"), engines("http://s/x.ts")]));
+check("uruchomione: zapamietany HLS idzie na poczatek tylko dla wlasnego adresu (.m3u8)",
+  engines("http://s/x.m3u8")[0] === "hls" && engines("http://s/x.m3u8").length === 2,
+  JSON.stringify(engines("http://s/x.m3u8")));
+check("uruchomione: zapasowy .m3u8 nie wypycha sprawdzonego adresu .ts (kanal 4K szedl na HLS)",
+  engines("http://s/x.ts").join(",") === "native,mse,native,hls",
+  JSON.stringify(engines("http://s/x.ts")));
 queueBox.settings.engineHint = "bogus";
 check("uruchomione: nieznana pamiec nic nie psuje",
   engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
 
+
+/* --- 26. hls.js: strumien, ktorego nie rozbierze (4K HEVC w M2TS) ------------
+   hls.js zglasza taki fragment jako zwykle ostrzezenie (bez „fatal”) i gra dalej
+   sam dzwiek, powtarzajac je przy kazdym fragmencie — na ekranie zostaje
+   „mediaError/fragParsingError”, a obrazu nie ma i nie bedzie. Aplikacja musi
+   rozpoznac taka probe i oddac kanal innemu silnikowi, zamiast czekac z samym
+   dzwiekiem. */
+check("hls.js: fragmentow, ktorych nie rozbierze, nie czekamy do konca (dzwiek bez obrazu)",
+  src.indexOf("var unplayable = data.details === \"fragParsingError\" && hlsCannotPlay(data) &&") > 0 &&
+  src.indexOf("!videoHasPicture(video);") > 0 &&
+  src.indexOf("if (!data.fatal && !unplayable) return;") > 0 &&
+  src.indexOf("function hlsCannotPlay(data)") > 0);
+
+const cannotStart = src.indexOf("function hlsCannotPlay(data)");
+const cannotEnd = src.indexOf("\n  }\n", cannotStart);
+if (cannotStart < 0 || cannotEnd < 0) throw new Error("Nie znalazlem hlsCannotPlay w app.js");
+const cannotBox = {};
+run(src.slice(cannotStart, cannotEnd + 5), cannotBox);
+check("hls.js: „Unsupported HEVC in M2TS found” to koniec proby (tak wyglada 4K HEVC)",
+  cannotBox.hlsCannotPlay({ details: "fragParsingError", reason: "Unsupported HEVC in M2TS found" }) === true &&
+  cannotBox.hlsCannotPlay({ error: { message: "no support for video codec: hvc1" } }) === true,
+  String(cannotBox.hlsCannotPlay({ reason: "Unsupported HEVC in M2TS found" })));
+check("hls.js: pojedynczy zepsuty fragment nie konczy proby (strumien moze sie podniesc)",
+  cannotBox.hlsCannotPlay({ details: "fragParsingError", reason: "AAC PES did not start with ADTS header,offset:2" }) === false &&
+  cannotBox.hlsCannotPlay({ details: "fragParsingError", reason: "Found no media in msn 12 of level \"x\"" }) === false &&
+  cannotBox.hlsCannotPlay({}) === false,
+  String(cannotBox.hlsCannotPlay({ reason: "Found no media in msn 12" })));
 
 console.log("");
 if (fails) { console.log("BLEDY: " + fails); process.exit(1); }

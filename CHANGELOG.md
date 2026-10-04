@@ -20,6 +20,17 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.0.5] — 2026-10-04
+
+### Poprawiono
+- **Kanał 4K nie zostaje już z samym dźwiękiem** — gdy odtwarzacz HLS mówi
+  wprost, że nie rozbierze tych fragmentów (tak wygląda 4K HEVC), aplikacja
+  oddaje kanał innemu odtwarzaczowi od razu, zamiast czekać z dźwiękiem bez
+  obrazu.
+- **Zapasowy adres HLS nie wypycha już adresu kanału** — zapamiętany odtwarzacz
+  HLS wraca na początek kolejki tylko wtedy, gdy chodzi o ten sam adres, więc
+  kanał startuje od strumienia, który naprawdę nadaje.
+
 ## [2.0.4] — 2026-10-04
 
 ### Poprawiono

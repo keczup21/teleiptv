@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.0.4";
+  var APP_VERSION = "2.0.5";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -3518,6 +3518,15 @@
     });
   }
 
+  /* Czy hls.js mówi wprost, że tego strumienia nie rozbierze (a nie, że jeden
+     fragment był zepsuty)? Takie ostrzeżenia wracają przy każdym fragmencie:
+     „Unsupported HEVC in M2TS found”, kodek którego nie ma w MSE itd. — wtedy
+     czekanie na obraz już nic nie da. */
+  function hlsCannotPlay(data) {
+    var reason = String((data && data.error && data.error.message) || (data && data.reason) || "");
+    return /hevc|hvc1|hev1|m2ts|codec|support/i.test(reason);
+  }
+
   function startHlsSource(entry) {
     var token = nextEngineToken();
     state.engine = "hls";
@@ -3559,7 +3568,15 @@
         }
       };
       hls.on(window.Hls.Events.ERROR, function (event, data) {
-        if (!data || !data.fatal) return;
+        if (!data) return;
+        /* Źle rozebrany fragment nie kończy się błędem krytycznym: hls.js gra
+           dalej to, co zrozumiał, i ostrzeżenie wraca przy każdym fragmencie.
+           Przy 4K HEVC zostaje wtedy sam dźwięk i obrazu już nie będzie, a
+           dźwięk bez obrazu nie jest odtwarzaniem — dlatego taką próbę
+           kończymy od razu i oddajemy kanał innemu silnikowi. */
+        var unplayable = data.details === "fragParsingError" && hlsCannotPlay(data) &&
+          !videoHasPicture(video);
+        if (!data.fatal && !unplayable) return;
         handlePlaybackError(t("err_stream") + " (" + engineLabel("hls") + ": " + data.type + "/" + data.details + ")");
       });
       hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
@@ -3610,11 +3627,17 @@
      oddaje przez natywny dekoder sam dźwięk, a obraz pojawia się dopiero przez
      MSE albo HLS, nie ma sensu kazać użytkownikowi czekać na to samo przy
      każdym kanale. Pozostałe wpisy zostają w kolejce, więc gdy zapamiętany
-     sposób zawiedzie (np. inny kodek), przejście dalej działa jak dotąd. */
+     sposób zawiedzie (np. inny kodek), przejście dalej działa jak dotąd.
+
+     Warunek „ten sam adres” jest tu istotny: zapasowy HLS („kanał.ts” →
+     „kanał.m3u8”) to inny strumień — nie wiadomo, czy w ogóle istnieje i co
+     nadaje, a kanał 4K potrafi w nim trafić na HEVC, którego hls.js nie
+     rozbierze. Pamięć po innym kanale nie może więc wypychać go przed adres,
+     który dla tego kanału naprawdę działa. */
   function preferEngine(queue, hint) {
     if (hint !== "mse" && hint !== "hls") return queue;
     for (var i = 1; i < queue.length; i++) {
-      if (queue[i].engine === hint) {
+      if (queue[i].engine === hint && queue[i].url === queue[0].url) {
         var entry = queue.splice(i, 1)[0];
         queue.unshift(entry);
         break;
