@@ -11,8 +11,8 @@ android {
         applicationId "pl.openiptv.player"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 38
-        versionName "2.0.2"
+        versionCode 39
+        versionName "2.0.3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildFeatures {
             buildConfig true

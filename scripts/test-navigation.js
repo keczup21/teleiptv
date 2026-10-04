@@ -1029,6 +1029,10 @@ const menuBranch = src.indexOf("if (!onOsdButton && state.osdMenu && osdVisible(
 const zapBranch = src.indexOf("zapChannel(key === 38 ? -1 : 1);");
 check("wejscie w menu stoi przed przelaczaniem kanalu",
   menuBranch > 0 && zapBranch > menuBranch);
+check("krotkie OK rozstrzygane, gdy pilot wysle ▲ ▼ przed zwolnieniem klawisza",
+  src.indexOf("if (!onOsdButton && state.okHoldTimer && (key === 38 || key === 40)) flushOkShort();") > 0 &&
+  src.indexOf("function flushOkShort()") > 0 &&
+  src.indexOf("state.okFired = true;\n    if (action) action();") > 0);
 check("▲ ▼ z paska wychodza z menu na obraz (kanal znowu dziala)",
   src.indexOf("if (key === 38 || key === 40) {\n          if (!focusNearest(key)) leaveOsdBar();\n        } else {\n          focusNearest(key);\n        }") > 0 &&
   src.indexOf("function leaveOsdBar()") > 0);
@@ -1078,7 +1082,7 @@ function fakeEl(hidden) {
 }
 function keyHarness(o) {
   o = o || {};
-  const calls = { zap: [], focus: [], enter: 0, leave: 0, clicks: 0 };
+  const calls = { zap: [], focus: [], enter: 0, leave: 0, clicks: 0, shortOk: 0 };
   const player = fakeEl(false);            /* ekran odtwarzacza widoczny */
   const overlay = fakeEl(!o.overlayVisible); /* pasek widoczny albo schowany */
   const ctxMenu = fakeEl(false);            /* menu opcji nad obrazem */
@@ -1089,7 +1093,13 @@ function keyHarness(o) {
   active.click = function () { calls.clicks++; };
   let handler = null;
   const sandbox = {
-    state: { osdMenu: !!o.osdMenu, watchChannel: { name: "TVN" }, mediaKeyAt: 0 },
+    state: {
+      osdMenu: !!o.osdMenu,
+      watchChannel: { name: "TVN" },
+      mediaKeyAt: 0,
+      /* OK wciśnięte i jeszcze nie puszczone (pilot nie doniósł o zwolnieniu) */
+      okHoldTimer: o.okPending ? 11 : null
+    },
     settings: { dpadSeek: false, osdEnabled: true },
     $: function (id) {
       if (id === "playerScreen") return player;
@@ -1106,6 +1116,17 @@ function keyHarness(o) {
     osdVisible: function () { return !!o.overlayVisible; },
     enterOsdBar: function () { calls.enter++; return true; },
     leaveOsdBar: function () { calls.leave++; },
+    /* krótkie OK rozstrzygnięte, zanim pilot zwolnił klawisz: w aplikacji to
+       przełącznik paska — otwiera go jako menu, a przy otwartym pasku zamyka
+       (wtedy ▼ znowu zmienia kanał). Atrapa robi to samo na swojej nakładce,
+       żeby dalsza część obsługi klawisza działała jak w aplikacji. */
+    flushOkShort: function () {
+      calls.shortOk++;
+      if (o.okShortOpensBar === false) return;   /* pasek wyłączony w ustawieniach */
+      const open = !!o.overlayVisible;
+      o.overlayVisible = !open;
+      sandbox.state.osdMenu = !open;
+    },
     zapChannel: function (direction) { calls.zap.push(direction); },
     focusNearest: function (key) { calls.focus.push(key); return o.focusMoves !== false; },
     scheduleOsdHide: function () {},
@@ -1144,6 +1165,33 @@ kh = keyHarness({});
 kh.press(38);
 check("uruchomione: bez paska ▲ zmienia kanal w gore",
   kh.calls.zap.length === 1 && kh.calls.zap[0] === -1 && kh.calls.enter === 0, JSON.stringify(kh.calls));
+
+/* OK i szybkie ▼: pilot wysyła strzałkę, zanim dotrze zwolnienie klawisza —
+   pasek ma się wtedy otworzyć, a ▼ wejść w jego przyciski, a nie zmienić
+   kanału (właśnie to „OK, ▼” po naciśnięciu środkowego przycisku). */
+kh = keyHarness({ osdMenu: false, overlayVisible: false, okPending: true, okShortOpensBar: true });
+kh.press(40);
+check("uruchomione: ▼ w trakcie trzymania OK otwiera pasek, a nie zmienia kanalu",
+  kh.calls.shortOk === 1 && kh.calls.enter === 1 && kh.calls.zap.length === 0,
+  JSON.stringify(kh.calls));
+
+kh = keyHarness({ osdMenu: false, overlayVisible: false, okPending: true, okShortOpensBar: true });
+kh.press(38);
+check("uruchomione: ▲ w trakcie trzymania OK tak samo wchodzi w pasek",
+  kh.calls.shortOk === 1 && kh.calls.enter === 1 && kh.calls.zap.length === 0,
+  JSON.stringify(kh.calls));
+
+kh = keyHarness({ osdMenu: false, overlayVisible: false, okPending: true, okShortOpensBar: false });
+kh.press(40);
+check("uruchomione: gdy pasek sie nie otworzy, ▼ dalej przełącza kanał (CH+ bez zmian)",
+  kh.calls.shortOk === 1 && kh.calls.zap.length === 1 && kh.calls.enter === 0,
+  JSON.stringify(kh.calls));
+
+kh = keyHarness({ osdMenu: true, overlayVisible: true, okPending: true });
+kh.press(40);
+check("uruchomione: OK przy otwartym pasku zamyka go, wiec ▼ znowu zmienia kanal",
+  kh.calls.shortOk === 1 && kh.calls.zap.length === 1 && kh.calls.enter === 0,
+  JSON.stringify(kh.calls));
 
 kh = keyHarness({ osdMenu: true, overlayVisible: true, onOsdButton: true });
 kh.press(39);
@@ -1313,6 +1361,19 @@ check("brak obrazu: jedna runda po sposobach odtwarzania i komunikat, co sie sta
   src.indexOf("nextSourceEntry(t(\"err_no_picture\"), 0, false, 0, t(\"err_no_picture_hint\"));") > 0 &&
   src.indexOf("err_no_picture_hint:") > 0 &&
   src.indexOf("if (!custom || limit > 0) {") > 0);
+check("kanal 4K nie jest restartowany w polowie wczytywania (budziki patrza na ruch strumienia)",
+  src.indexOf("var CONNECT_WAIT = 45000;") > 0 &&
+  src.indexOf("var UHD_WAIT = 30000;") > 0 &&
+  src.indexOf("var STREAM_STALL = 6000;") > 0 &&
+  src.indexOf("function streamStillComing()") > 0 &&
+  src.indexOf("if (!state.entryWaitStart) return false;") > 0 &&
+  src.indexOf("if (Date.now() - state.lastActivityAt >= STREAM_STALL) return false;") > 0 &&
+  src.indexOf("video.addEventListener(\"progress\", noteStreamActivity);") > 0 &&
+  src.indexOf("if (streamStillComing()) { armStartWatchdog(token); return; }") > 0 &&
+  src.indexOf("if (streamStillComing()) { armPictureWatchdog(token); return; }") > 0 &&
+  src.indexOf("if (!state.pictureRetried && !videoIsUhd() && applyVideoLayerFix(true)) {") > 0 &&
+  src.indexOf("state.entryWaitStart = Date.now();\n    state.lastActivityAt = Date.now();") > 0);
+
 const picStart = src.indexOf("var PICTURE_TIMEOUT = 6000;");
 const picEnd = src.indexOf("function nextSourceEntry(");
 if (picStart < 0 || picEnd <= picStart) throw new Error("Nie znalazlem budzika obrazu w app.js");
@@ -1327,9 +1388,17 @@ const codePicture = src.slice(picStart, src.lastIndexOf("\n\n", picEnd) + 2);
 function pictureHarness(o) {
   o = o || {};
   const calls = { errors: [], started: [], next: [], saves: 0, pending: [] };
-  const video = { videoWidth: o.picture ? 1280 : 0, videoHeight: o.picture ? 720 : 0 };
+  /* obraz: 720p (jest / nie ma), 4K, albo kanał bez metadanych (dopiero się łączy) */
+  const video = {
+    videoWidth: o.uhd ? 3840 : (o.picture ? 1280 : 0),
+    videoHeight: o.uhd ? 2160 : (o.picture ? 720 : 0),
+    readyState: o.readyState === undefined ? 2 : o.readyState
+  };
   const classes = [];
   let timerId = 0;
+  /* Zegar atrapy: budziki patrzą na to, czy strumień coś dociąga, więc czas
+     musi być w rękach testu (patrz streamStillComing w app.js). */
+  let clock = typeof o.nowMs === "number" ? o.nowMs : Date.now();
   const sandbox = {
     settings: { videoLayerFix: false, engineHint: "" },
     state: {
@@ -1339,11 +1408,15 @@ function pictureHarness(o) {
       pictureTimer: null,
       pictureRetried: false,
       retryTimer: null,
+      /* jedna próba: od kiedy trwa i kiedy strumień ostatnio naprawdę coś dociągnął */
+      entryWaitStart: o.waitStart === undefined ? 0 : o.waitStart,
+      lastActivityAt: o.activity === undefined ? 0 : o.activity,
       sources: [{ engine: "native", url: "http://s/x.ts" }, { engine: "mse", url: "http://s/x.ts" }],
       sourceIndex: 0
     },
     t: function (key) { return "<" + key + ">"; },
     $: function (id) { return id === "video" ? video : null; },
+    Date: { now: function () { return clock; } },
     document: {
       body: {
         classList: {
@@ -1370,6 +1443,8 @@ function pictureHarness(o) {
     calls: calls,
     video: video,
     classes: classes,
+    /* przesuwa zegar atrapy (czas plynie tylko wtedy, gdy test tak powie) */
+    setNow: function (value) { clock = value; return clock; },
     /* wywoluje budziki czekajace w kolejce */
     fire: function () {
       const queue = calls.pending.splice(0);
@@ -1433,6 +1508,67 @@ ph = pictureHarness({ engine: "mse" });
 check("uruchomione: bez obrazu tryb nie trafia do pamieci (MSE sam nie dostaje pochwaly)",
   ph.api.notePicture() === false && ph.api.settings.engineHint === "" && ph.calls.saves === 0,
   JSON.stringify({ hint: ph.api.settings.engineHint, saves: ph.calls.saves }));
+
+/* 4K: pierwsze klatki potrzebuja wiecej czasu, wiec dopoki strumien naprawde
+   cos dociaga, proba jest przedluzana — restart co 6 s nie dawal obrazu nigdy */
+const NOW4K = 900000000;
+ph = pictureHarness({ uhd: true, nowMs: NOW4K });
+check("uruchomione: 4K (metadane juz sa) dostaje na probe 30 s zamiast 6",
+  ph.api.videoIsUhd() === true && ph.api.waitBudget() === 30000, String(ph.api.waitBudget()));
+ph = pictureHarness({ nowMs: NOW4K, readyState: 0 });
+check("uruchomione: kanal, ktory dopiero sie laczy, dostaje na probe 45 s",
+  ph.api.videoIsUhd() === false && ph.api.waitBudget() === 45000, String(ph.api.waitBudget()));
+ph = pictureHarness({ nowMs: NOW4K, readyState: 2 });
+check("uruchomione: SD/HD dostaje jak dotad 6 s (naprawa warstwy bez zwloki)",
+  ph.api.waitBudget() === 6000, String(ph.api.waitBudget()));
+
+/* ruch w strumieniu przedluza probe, cisza konczy ja od razu */
+ph = pictureHarness({ uhd: true, nowMs: NOW4K, waitStart: NOW4K - 20000, activity: NOW4K - 500 });
+check("uruchomione: 4K dostaje wiecej czasu, dopoki strumien cos dociaga",
+  ph.api.streamStillComing() === true, String(ph.api.streamStillComing()));
+ph = pictureHarness({ uhd: true, nowMs: NOW4K, waitStart: NOW4K - 31000, activity: NOW4K - 500 });
+check("uruchomione: po swoim czasie 4K nie jest juz przedluzany",
+  ph.api.streamStillComing() === false, String(ph.api.streamStillComing()));
+ph = pictureHarness({ uhd: true, nowMs: NOW4K, waitStart: NOW4K - 5000, activity: NOW4K - 10000 });
+check("uruchomione: cisza w strumieniu konczy probe, nawet gdy czasu zostalo duzo",
+  ph.api.streamStillComing() === false, String(ph.api.streamStillComing()));
+
+/* kanal, ktory dopiero sie laczy (brak metadanych), nie jest ucinany po 6 s */
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 20000, activity: NOW4K - 500, readyState: 0 });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: kanal, ktory dopiero sie laczy, nie jest przerywany po 6 s",
+  ph.classes.length === 0 && ph.calls.next.length === 0 && ph.api.state.pictureTimer !== null,
+  JSON.stringify({ classes: ph.classes, next: ph.calls.next }));
+
+/* ale gdy czas proby sie skonczyl, budzik przestaje czekac (idzie do naprawy,
+   a potem do kolejnego sposobu) — zamiast przedluzac probe w nieskonczonosc */
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 50000, activity: NOW4K - 500, readyState: 0 });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: po wykorzystanym czasie proby budzik nie czeka juz dalej",
+  ph.api.state.pictureTimer === null && ph.calls.pending.length === 1 &&
+  ph.calls.started.length === 0,
+  JSON.stringify({ timer: ph.api.state.pictureTimer, pending: ph.calls.pending.length }));
+
+/* martwy kanal nie zajmuje kolejki: cisza w strumieniu konczy sprawe od razu,
+   choc czasu proby zostalo jeszcze duzo */
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 20000, activity: NOW4K - 10000, readyState: 0 });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: cisza w strumieniu konczy probe od razu (bez czekania do konca czasu)",
+  ph.api.state.pictureTimer === null && ph.calls.pending.length === 1 &&
+  ph.calls.started.length === 0 && ph.classes.length <= 1,
+  JSON.stringify({ timer: ph.api.state.pictureTimer, pending: ph.calls.pending.length }));
+
+/* SD/HD bez obrazu: naprawa warstwy obrazu dziala jak dotad, bez zwloki */
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 7000, activity: NOW4K - 500, readyState: 2 });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: SD/HD bez obrazu idzie do naprawy warstwy bez zwloki (jak w 2.0.2)",
+  ph.classes.indexOf("video-layer-fix") >= 0 && ph.calls.started.length === 0 &&
+  ph.calls.next.length === 0,
+  JSON.stringify({ classes: ph.classes, next: ph.calls.next }));
 
 /* zapamietany tryb idzie na poczatek kolejki nastepnego kanalu */
 const queueStart = src.indexOf("function buildSourceQueue(primaryUrl)");

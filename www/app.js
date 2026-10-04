@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.0.2";
+  var APP_VERSION = "2.0.3";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -151,6 +151,14 @@
     /* czy przy tym wpisie kolejki próbowaliśmy już naprawy warstwy obrazu;
        bez tego jedna próba zamieniałaby się w pętlę */
     pictureRetried: false,
+    /* Jedna próba odtwarzania to nie wyścig z zegarem: liczymy, od kiedy trwa
+       („entryWaitStart”) i kiedy strumień ostatnio naprawdę coś dociągnął
+       („lastActivityAt”). Kanał 4K potrzebuje na pierwsze klatki dużo więcej
+       czasu niż SD/HD, a restart w połowie wczytywania cofa go do zera —
+       dlatego budziki patrzą na ruch strumienia, nie tylko na upływ czasu
+       (patrz streamStillComing). */
+    entryWaitStart: 0,
+    lastActivityAt: 0,
     /* blokada zdarzeń przewijania listy (rysujemy jedną porcję na raz) */
     listScrollLock: false
   };
@@ -3271,8 +3279,17 @@
     updateMediaSession();
   }
 
+  /* Dowód, że strumień naprawdę coś robi: dociąga dane albo dekoder rośnie
+     w gotowości. To jedyny uczciwy sygnał, że kanał się wczytuje — bez niego
+     budziki uznawały wolny kanał 4K za zepsuty i restartowały go co kilka
+     sekund (patrz armStartWatchdog / armPictureWatchdog). */
+  function noteStreamActivity() {
+    state.lastActivityAt = Date.now();
+  }
+
   function bindVideoEvents(video) {
     video.addEventListener("playing", function () {
+      noteStreamActivity();
       $("playerError").classList.add("hidden");
       clearStartWatchdog();
       /* Dźwięk wystartował, ale to jeszcze nie znaczy, że jest obraz —
@@ -3305,6 +3322,10 @@
       state.osdTimer = null;
     });
 
+    /* dane naprawdę przychodzą — strumień się wczytuje (albo nadgania bufor);
+       wolny kanał 4K nie może być za to ukarany restartem */
+    video.addEventListener("progress", noteStreamActivity);
+
     /* buforowanie: pasek mówi wprost, co się dzieje i który silnik pracuje */
     video.addEventListener("waiting", function () {
       if (!state.currentSource) return;
@@ -3316,18 +3337,27 @@
     });
 
     video.addEventListener("timeupdate", function () {
+      /* kolejna klatka w kolejce odtwarzania = strumień żyje */
+      noteStreamActivity();
       /* Pierwsza klatka może pojawić się już po zdarzeniu „canplay” (dekoder
          zdekodował ją później) — dlatego budzik obrazu sprawdzamy też tutaj. */
       notePicture();
       updateOsdProgress();
     });
     video.addEventListener("loadedmetadata", function () {
+      noteStreamActivity();
+      /* Wymuszona warstwa obrazu (patrz applyVideoLayerFix) pomaga dekoderom,
+         które oddają sam dźwięk, ale przy 4K potrafi zostawić obraz czarny —
+         dlatego przy takim strumieniu zdejmujemy ją z obrazu. Dla SD/HD naprawa
+         włączy się znowu sama, gdy naprawdę będzie potrzebna. */
+      if (videoIsUhd()) applyVideoLayerFix(false);
       /* obraz wczytał metadane — nie ma sensu czekać na kolejny sposób */
       clearStartWatchdog();
       notePicture();
       updateOsd();
     });
     video.addEventListener("canplay", function () {
+      noteStreamActivity();
       clearStartWatchdog();
       notePicture();
     });
@@ -3601,6 +3631,11 @@
     state.currentSource = entry.url;
     state.engine = entry.engine;
     state.pictureRetried = false;
+    /* nowa próba: czas jej trwania i ruch strumienia liczą się od zera —
+       budziki patrzą na to, czy kanał naprawdę się wczytuje (patrz
+       streamStillComing), więc bez tego liczyłyby ciszę po poprzedniej próbie */
+    state.entryWaitStart = Date.now();
+    state.lastActivityAt = Date.now();
     if (entry.engine === "mse") startMseSource(entry);
     else if (entry.engine === "hls") startHlsSource(entry);
     else playSource(entry.url);
@@ -3622,6 +3657,9 @@
     state.startTimer = setTimeout(function () {
       state.startTimer = null;
       if (!state.watchChannel || state.engineToken !== token) return;
+      /* Kanał, który wciąż dociąga dane, nie jest zepsuty — tylko wolny.
+         Bez tego 4K był ucinany w połowie wczytywania i startował od nowa. */
+      if (streamStillComing()) { armStartWatchdog(token); return; }
       var video = $("video");
       if (video && video.readyState >= 2 && !video.paused) {
         /* Dźwięk już leci, więc zwykły budzik uznałby odtwarzanie za udane.
@@ -3637,6 +3675,45 @@
 
   /* Ile ms odtwarzania bez ani jednej klatki uznajemy za zablokowany dekoder. */
   var PICTURE_TIMEOUT = 6000;
+
+  /* Jedna próba dostaje więcej czasu niż PICTURE_TIMEOUT, gdy wiadomo, że
+     strumień jest „ciężki” albo dopiero się łączy:
+
+       • 4K / HEVC — dekoder składa dużo większą klatkę, start trwa najdłużej,
+       • brak metadanych — kanał jeszcze się łączy (wolny serwer, duży bufor),
+       • SD / HD    — po PICTURE_TIMEOUT dłuższe czekanie nic już nie zmieni.
+
+     Każdy z tych czasów obowiązuje tylko dopóki coś naprawdę przychodzi
+     (patrz streamStillComing) — martwy kanał leci dalej od razu. */
+  var CONNECT_WAIT = 45000;
+  var UHD_WAIT = 30000;
+  /* tyle ciszy w strumieniu znaczy, że kanał stanął i szkoda na niego czasu */
+  var STREAM_STALL = 6000;
+
+  /* Rozdzielczość znamy od „loadedmetadata” — wymiary klatki to jedyny ślad,
+     że to naprawdę 4K (ustawienia strumienia w playliście bywają nieprawdziwe). */
+  function videoIsUhd() {
+    var video = $("video");
+    if (!video) return false;
+    return (video.videoHeight | 0) >= 1440 || (video.videoWidth | 0) >= 2560;
+  }
+
+  function waitBudget() {
+    if (videoIsUhd()) return UHD_WAIT;
+    var video = $("video");
+    if (!video || video.readyState < 1) return CONNECT_WAIT;
+    return PICTURE_TIMEOUT;
+  }
+
+  /* Czy warto jeszcze czekać na tę próbę: musi coś przychodzić (dane albo
+     kolejne etapy wczytywania) i nie może się skończyć czas przeznaczony na
+     jedną próbę. Bez tego kanał 4K był restartowany co 6 s i nigdy nie zdążył
+     pokazać obrazu — z obrazu robiło się „co chwila ładuje”. */
+  function streamStillComing() {
+    if (!state.entryWaitStart) return false;
+    if (Date.now() - state.lastActivityAt >= STREAM_STALL) return false;
+    return Date.now() - state.entryWaitStart < waitBudget();
+  }
 
   /* obraz to nie dźwięk: dopóki nie ma ani jednej klatki, <video> jest czarne.
      Wymiary klatki (videoWidth/videoHeight) to jedyny sygnał — stan odtwarzania
@@ -3663,7 +3740,13 @@
       state.pictureTimer = null;
       if (!state.watchChannel || state.engineToken !== token) return;
       if (videoHasPicture($("video"))) return;
-      if (!state.pictureRetried && applyVideoLayerFix(true)) {
+      /* Kanał 4K dociąga pierwsze klatki dłużej — dopóki strumień naprawdę
+         coś robi, próbę przedłużamy, zamiast restartować ją od zera. */
+      if (streamStillComing()) { armPictureWatchdog(token); return; }
+      /* Warstwa obrazu pomaga dekoderom, które oddają sam dźwięk — ale przy 4K
+         był to tylko niepotrzebny restart ciężkiego strumienia, więc tam od
+         razu przechodzimy do następnego sposobu odtwarzania. */
+      if (!state.pictureRetried && !videoIsUhd() && applyVideoLayerFix(true)) {
         state.pictureRetried = true;
         retryCurrentEntry(t("err_no_picture"));
         return;
@@ -5765,6 +5848,21 @@
     else if (currentScreenId() === "playerScreen") toggleOsd();
   }
 
+  /* OK rozstrzygnięte, zanim pilot zdążył zwolnić klawisz: ▲ albo ▼ przyszło
+     w trakcie trzymania OK. Pilot wysyła strzałkę szybciej, niż odbiornik
+     donosi o puszczeniu klawisza — bez tego ▼ zmieniało kanał, choć użytkownik
+     właśnie chciał wejść w przyciski paska. Zwolnienie klawisza nie robi już
+     wtedy nic (state.okFired), więc jedno naciśnięcie to nadal jedna akcja. */
+  function flushOkShort() {
+    var action = state.okAction;
+    clearTimeout(state.okHoldTimer);
+    state.okHoldTimer = null;
+    state.okAction = null;
+    state.okFired = true;
+    if (action) action();
+    else if (currentScreenId() === "playerScreen") toggleOsd();
+  }
+
   /* Jedna wspólna obsługa „Wstecz” — dla klawisza pilota (webOS 461, Android 4)
      i dla sprzętowego Back na Android TV / Fire TV (MainActivity pyta o nią
      przez window.__openiptvBack). Zwraca true, gdy zdarzenie zostało zużyte. */
@@ -6014,6 +6112,12 @@
           return;
         }
       }
+
+      /* ▲ ▼ potrafi przyjść w trakcie trzymania OK (pilot nie zdążył donieść
+         o puszczeniu klawisza). Wtedy OK rozstrzygamy od razu jako krótkie,
+         żeby pasek zdążył się otworzyć, a ▼ weszło w jego przyciski — inaczej
+         szybkie „OK, ▼” zmieniało kanał zamiast pokazać menu. */
+      if (!onOsdButton && state.okHoldTimer && (key === 38 || key === 40)) flushOkShort();
 
       /* Pasek otwarty klawiszem OK (albo dotknięciem) jest menu: ▲ ▼ wchodzą
          w jego przyciski — „Pauza”, „EPG”… — a nie przełączają kanału. Pasek

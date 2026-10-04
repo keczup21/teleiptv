@@ -540,24 +540,27 @@ body.uimode-touch .player-toast { font-size: 24px; padding: 14px 24px; }
 
 /* zegar w rogu obrazu (Ustawienia → „Zegar w rogu obrazu”): przyklejony do
    lewego górnego rogu, widoczny tylko na ekranie odtwarzacza i tylko podczas
-   oglądania — nie łapie kliknięć ani fokusu, więc pilot dalej chodzi po wideo */
+   oglądania — nie łapie kliknięć ani fokusu, więc pilot dalej chodzi po wideo.
+   Celowo przygaszony: to tylko podpowiedź, nie ma konkurować z obrazem. */
 .corner-clock {
   position: absolute;
   left: 34px; top: 26px;
-  padding: 6px 18px;
-  background: rgba(0,0,0,.55);
-  border: 1px solid rgba(255,255,255,.10);
+  padding: 4px 14px;
+  background: rgba(0,0,0,.32);
+  border: 1px solid rgba(255,255,255,.06);
   border-radius: 999px;
-  color: #fff;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: .5px;
+  color: rgba(255,255,255,.82);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: .4px;
+  opacity: .72;
+  text-shadow: 0 1px 2px rgba(0,0,0,.45);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   z-index: 2;
 }
-body.uimode-tv .corner-clock { font-size: 36px; padding: 8px 24px; }
-body.uimode-touch .corner-clock { font-size: 20px; padding: 5px 14px; left: 16px; top: 14px; }
+body.uimode-tv .corner-clock { font-size: 26px; padding: 5px 18px; opacity: .68; }
+body.uimode-touch .corner-clock { font-size: 17px; padding: 4px 12px; left: 16px; top: 14px; opacity: .62; }
 
 .player-error {
   position: absolute;

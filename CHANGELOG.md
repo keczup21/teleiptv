@@ -18,6 +18,26 @@ z numerem opisuje akapit wyżej). Opis wydania na GitHubie powstaje z tego wpisu
 `npm run notes` (`scripts/release-notes.js`) bierze z changeloga tylko sekcję
 wydawanej wersji.
 
+## [2.0.3] — 2026-10-04
+
+### Poprawiono
+- **Kanał 4K wczytuje się bez restartów.** Odtwarzanie dostawało sztywny czas na
+  start — 6 s na pierwsze klatki, 9 s na dźwięk — a kanał 4K potrzebuje na to
+  znacznie więcej. Po przekroczeniu czasu aplikacja przerywała wczytywanie
+  i zaczynała od nowa, więc obrazu nie było, a kanał „co chwila ładuje”. Teraz
+  jedna próba dostaje 30 s (4K) albo 45 s (kanał, który jeszcze się łączy)
+  i jest przedłużana, dopóki strumień naprawdę coś dociąga; dopiero cisza
+  w strumieniu kończy próbę i oddaje kolejkę następnemu sposobowi odtwarzania.
+  SD i HD działają jak dotąd, a wymuszona warstwa obrazu nie jest już włączana
+  przy 4K.
+- **Zegar w rogu obrazu jest mniej widoczny.** Mniejszy napis na przygaszonym
+  tle, bez mocnej obwódki — ma być podpowiedzią, a nie konkurencją dla obrazu.
+- **Szybkie „OK, ▼” pokazuje menu, a nie zmienia kanału.** Pilot wysyła strzałkę,
+  zanim dotrze informacja o puszczeniu OK, więc ▼ trafiało w zmianę kanału,
+  a nie w menu paska. Teraz zakończenie trzymania OK rozstrzyga się od razu:
+  pasek otwiera się jako menu, a ▼ wchodzi w jego przyciski. Gdy pasek jest
+  wyłączony w ustawieniach, ▼ dalej przełącza kanały.
+
 ## [2.0.2] — 2026-10-03
 
 ### Poprawiono
