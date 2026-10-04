@@ -1385,7 +1385,7 @@ check("kanal 4K nie jest restartowany w polowie wczytywania (budziki patrza na r
   src.indexOf("video.addEventListener(\"progress\", noteStreamActivity);") > 0 &&
   src.indexOf("if (streamStillComing()) { armStartWatchdog(token); return; }") > 0 &&
   src.indexOf("if (streamStillComing()) { armPictureWatchdog(token); return; }") > 0 &&
-  src.indexOf("if (!state.pictureRetried && !videoIsUhd() && applyVideoLayerFix(true)) {") > 0 &&
+  src.indexOf("if (!state.pictureRetried && !videoIsUhd() && !state.uhdSeen && applyVideoLayerFix(true)) {") > 0 &&
   src.indexOf("state.entryWaitStart = Date.now();\n    state.lastActivityAt = Date.now();") > 0);
 
 const picStart = src.indexOf("var PICTURE_TIMEOUT = 6000;");
@@ -1393,7 +1393,8 @@ const picEnd = src.indexOf("function nextSourceEntry(");
 if (picStart < 0 || picEnd <= picStart) throw new Error("Nie znalazlem budzika obrazu w app.js");
 const codePicture = src.slice(picStart, src.lastIndexOf("\n\n", picEnd) + 2);
 ["videoHasPicture", "armPictureWatchdog", "retryCurrentEntry", "clearPictureWatchdog",
-  "notePicture", "applyVideoLayerFix", "rememberEngine"].forEach(function (fn) {
+  "notePicture", "applyVideoLayerFix", "rememberEngine", "noteUhd", "manifestIsUhd",
+  "nativeCanPlay", "nativeEntryIndex"].forEach(function (fn) {
   if (codePicture.indexOf("function " + fn) < 0) throw new Error("Wyciety blok nie ma " + fn);
 });
 
@@ -1401,12 +1402,14 @@ const codePicture = src.slice(picStart, src.lastIndexOf("\n\n", picEnd) + 2);
    ustawien, kolejka budzikow wywolywana recznie (tak jakby plynal czas) */
 function pictureHarness(o) {
   o = o || {};
-  const calls = { errors: [], started: [], next: [], saves: 0, pending: [] };
+  const calls = { errors: [], started: [], next: [], saves: 0, pending: [], destroyed: 0 };
   /* obraz: 720p (jest / nie ma), 4K, albo kanał bez metadanych (dopiero się łączy) */
   const video = {
     videoWidth: o.uhd ? 3840 : (o.picture ? 1280 : 0),
     videoHeight: o.uhd ? 2160 : (o.picture ? 720 : 0),
-    readyState: o.readyState === undefined ? 2 : o.readyState
+    readyState: o.readyState === undefined ? 2 : o.readyState,
+    /* .m3u8 gra sprzętowo tylko tam, gdzie odbiornik ma własny HLS (webOS, Safari) */
+    canPlayType: function () { return o.canPlayType || ""; }
   };
   const classes = [];
   let timerId = 0;
@@ -1414,19 +1417,22 @@ function pictureHarness(o) {
      musi być w rękach testu (patrz streamStillComing w app.js). */
   let clock = typeof o.nowMs === "number" ? o.nowMs : Date.now();
   const sandbox = {
-    settings: { videoLayerFix: false, engineHint: "" },
+    settings: { videoLayerFix: o.layerFix === true, engineHint: "" },
     state: {
       watchChannel: { name: "TVN" },
       engineToken: 7,
       engine: o.engine || "native",
       pictureTimer: null,
       pictureRetried: false,
+      /* rozpoznanie 4K przy kanale (metadane klatki albo manifest HLS) */
+      uhdSeen: o.uhdSeen === true,
+      uhdNativeTried: o.nativeTried === true,
       retryTimer: null,
       /* jedna próba: od kiedy trwa i kiedy strumień ostatnio naprawdę coś dociągnął */
       entryWaitStart: o.waitStart === undefined ? 0 : o.waitStart,
       lastActivityAt: o.activity === undefined ? 0 : o.activity,
-      sources: [{ engine: "native", url: "http://s/x.ts" }, { engine: "mse", url: "http://s/x.ts" }],
-      sourceIndex: 0
+      sources: o.sources || [{ engine: "native", url: "http://s/x.ts" }, { engine: "mse", url: "http://s/x.ts" }],
+      sourceIndex: o.sourceIndex === undefined ? 0 : o.sourceIndex
     },
     t: function (key) { return "<" + key + ">"; },
     $: function (id) { return id === "video" ? video : null; },
@@ -1448,6 +1454,7 @@ function pictureHarness(o) {
     nextSourceEntry: function (message, delay, silent, maxCycles, finalHint) {
       calls.next.push({ message: message, maxCycles: maxCycles, finalHint: finalHint });
     },
+    destroyEngine: function () { calls.destroyed++; },
     setTimeout: function (fn) { timerId++; calls.pending.push(fn); return timerId; },
     clearTimeout: function () {}
   };
@@ -1584,15 +1591,106 @@ check("uruchomione: SD/HD bez obrazu idzie do naprawy warstwy bez zwloki (jak w 
   ph.calls.next.length === 0,
   JSON.stringify({ classes: ph.classes, next: ph.calls.next }));
 
-/* 4K z samym dzwiekiem: wymiary klatki (videoWidth/videoHeight) sa jedynym
-   sygnalem zarowno obrazu, jak i 4K — majac je, budzik uznaje, ze obraz jest.
-   4K bez obrazu ma wiec wymiary zerowe i idzie ta sama droga co SD/HD (naprawa
-   warstwy obrazu, sprawdzone nizej) — dlatego nie ma tu osobnego wyjatku. */
+/* 4K z wymiarami klatki to dla budzika obraz (nic nie zmienia), a każde 4K —
+   rozpoznane także bez wymiarów (manifest HLS, patrz noteUhd) — nie dostaje
+   wymuszonej warstwy obrazu: to ona potrafiła zostawić czarny ekran, a przy 4K
+   obraz rozbiera praktycznie tylko dekoder sprzętowy. */
 ph = pictureHarness({ uhd: true, nowMs: NOW4K, waitStart: NOW4K - 40000, activity: NOW4K - 500 });
 ph.api.armPictureWatchdog(7);
 ph.fire();
 check("uruchomione: 4K z wymiarami klatki jest dla budzika obrazem (nic nie zmienia)",
   ph.classes.length === 0 && ph.calls.next.length === 0 && ph.calls.started.length === 0,
+  JSON.stringify({ classes: ph.classes, next: ph.calls.next }));
+
+check("kanal 4K: rozpoznany z metadanych i z manifestu HLS, a warstwa obrazu go nie dotyczy",
+  src.indexOf("if (videoIsUhd() && noteUhd()) return;") > 0 &&
+  src.indexOf("if (manifestIsUhd(data) && noteUhd()) return;") > 0 &&
+  src.indexOf("function noteUhd()") > 0 &&
+  src.indexOf("state.uhdSeen = false;\n    state.uhdNativeTried = false;") > 0);
+
+ph = pictureHarness({});
+check("uruchomione: 4K z manifestu HLS poznajemy po wysokosci poziomu, nie po obrazie",
+  ph.api.manifestIsUhd({ levels: [{ height: 2160 }] }) === true &&
+  ph.api.manifestIsUhd({ levels: [{ width: 3840 }] }) === true &&
+  ph.api.manifestIsUhd({ levels: [{ height: 1080 }, { height: 720 }] }) === false &&
+  ph.api.manifestIsUhd({}) === false && ph.api.manifestIsUhd(null) === false,
+  String(ph.api.manifestIsUhd({ levels: [{ height: 2160 }] })));
+
+check("uruchomione: sprzetowo da sie podac .ts wszedzie, a .m3u8 tylko z wlasnym HLS odbiornika",
+  ph.api.nativeCanPlay("http://s/x.ts") === true &&
+  ph.api.nativeCanPlay("http://s/x/live/12345") === true &&
+  ph.api.nativeCanPlay("http://s/x.m3u8") === false &&
+  pictureHarness({ canPlayType: "maybe" }).api.nativeCanPlay("http://s/x.m3u8?token=1") === true,
+  String(ph.api.nativeCanPlay("http://s/x.m3u8")));
+
+/* 4K z wymuszoną warstwą obrazu: warstwa schodzi, a po nią kanał startuje jeszcze
+   raz świeżym elementem — ale sposób odtwarzania, który już coś pokazywał, zostaje */
+ph = pictureHarness({
+  uhd: true, engine: "hls", layerFix: true, sourceIndex: 1,
+  sources: [{ engine: "native", url: "http://s/x.m3u8" }, { engine: "hls", url: "http://s/x.m3u8" }]
+});
+check("uruchomione: 4K z wymuszona warstwa obrazu startuje od nowa bez tej warstwy",
+  ph.api.noteUhd() === true && ph.api.settings.videoLayerFix === false &&
+  ph.api.state.uhdSeen === true && ph.calls.destroyed === 1 && ph.calls.saves === 1 &&
+  ph.calls.pending.length === 1 && ph.calls.started.length === 0,
+  JSON.stringify({ started: ph.calls.started, saves: ph.calls.saves }));
+ph.fire();
+check("uruchomione: 4K, ktory juz cos pokazywal, zostaje przy swoim odtwarzaczu",
+  ph.calls.started.length === 1 && ph.calls.started[0].engine === "hls" &&
+  ph.calls.started[0].url === "http://s/x.m3u8", JSON.stringify(ph.calls.started));
+
+/* obraz gra i warstwy nie było czego zdejmować — działającego 4K nie ruszamy */
+ph = pictureHarness({ uhd: true, engine: "hls" });
+const running = ph.api.noteUhd();
+check("uruchomione: 4K bez wymuszonej warstwy obrazu nie jest niepotrzebnie przeladowywany",
+  running === false && ph.api.state.uhdSeen === true && ph.calls.destroyed === 0 &&
+  ph.calls.started.length === 0 && ph.calls.pending.length === 0,
+  JSON.stringify(ph.calls.started));
+
+ph = pictureHarness({ uhd: true, engine: "native", layerFix: true });
+check("uruchomione: 4K na dekoderze sprzetowym startuje od nowa swiezym elementem",
+  ph.api.noteUhd() === true && ph.calls.started.length === 0 && ph.calls.pending.length === 1 &&
+  ph.calls.destroyed === 1, JSON.stringify({ pending: ph.calls.pending.length }));
+ph.fire();
+check("uruchomione: powtorka wraca do tego samego wpisu kolejki (natywnie)",
+  ph.calls.started.length === 1 && ph.calls.started[0].engine === "native" &&
+  ph.api.state.sourceIndex === 0, JSON.stringify(ph.calls.started));
+
+ph = pictureHarness({ uhd: true, engine: "native" });
+check("uruchomione: 4K na dekoderze sprzetowym bez warstwy obrazu gra dalej",
+  ph.api.noteUhd() === false && ph.calls.started.length === 0 && ph.calls.pending.length === 0,
+  JSON.stringify(ph.calls.started));
+
+/* kanał 4K z samym dźwiękiem (MSE nie rozbiera HEVC): pierwsza próba idzie do
+   dekodera sprzętowego — i tylko raz na kanał, żeby kolejka nie kręciła się w kółko */
+ph = pictureHarness({ engine: "mse", sourceIndex: 1 });
+check("uruchomione: 4K bez obrazu przestawia sie na dekoder sprzetowy",
+  ph.api.noteUhd() === true && ph.api.state.uhdNativeTried === true &&
+  ph.api.state.sourceIndex === 0 && ph.calls.destroyed === 1 && ph.calls.pending.length === 1,
+  JSON.stringify({ index: ph.api.state.sourceIndex }));
+ph.fire();
+check("uruchomione: przestawienie trafia na wpis natywny",
+  ph.calls.started.length === 1 && ph.calls.started[0].engine === "native",
+  JSON.stringify(ph.calls.started));
+check("uruchomione: drugie przestawienie na dekoder sprzetowy juz sie nie zdarza",
+  ph.api.noteUhd() === false && ph.calls.started.length === 1,
+  String(ph.calls.started.length));
+
+ph = pictureHarness({ engine: "mse", sourceIndex: 1, nativeTried: true });
+check("uruchomione: bez obrazu i bez czego przestawiac kanal nie startuje od nowa",
+  ph.api.noteUhd() === false && ph.calls.destroyed === 0 &&
+  ph.calls.started.length === 0 && ph.calls.pending.length === 0,
+  JSON.stringify(ph.calls.started));
+
+/* 4K rozpoznane z manifestu nie ma wymiarow klatki (dekoder oddaje sam dzwiek),
+   a mimo to nie dostaje wymuszonej warstwy obrazu — budzik idzie dalej */
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 50000, activity: NOW4K - 500,
+  readyState: 2, uhdSeen: true });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: 4K z manifestu nie dostaje warstwy obrazu, tylko nastepny sposob odtwarzania",
+  ph.classes.indexOf("video-layer-fix") < 0 && ph.api.settings.videoLayerFix === false &&
+  ph.calls.next.length === 1 && ph.calls.started.length === 0,
   JSON.stringify({ classes: ph.classes, next: ph.calls.next }));
 
 /* zapamietany tryb idzie na poczatek kolejki nastepnego kanalu */

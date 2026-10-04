@@ -20,6 +20,13 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.0.6] — 2026-10-04
+
+### Poprawiono
+- **Kanał 4K znowu ma obraz** — gdy aplikacja rozpozna 4K (z metadanych klatki
+  albo z manifestu HLS), zdejmuje wymuszoną warstwę obrazu, która zostawiała ten
+  kanał na czarnym ekranie, i oddaje go dekoderowi sprzętowemu.
+
 ## [2.0.5] — 2026-10-04
 
 ### Poprawiono

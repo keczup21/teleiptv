@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.0.5";
+  var APP_VERSION = "2.0.6";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -151,6 +151,14 @@
     /* czy przy tym wpisie kolejki próbowaliśmy już naprawy warstwy obrazu;
        bez tego jedna próba zamieniałaby się w pętlę */
     pictureRetried: false,
+    /* Kanał okazał się 4K (metadane klatki albo manifest HLS — patrz noteUhd).
+       Przy takim strumieniu obraz nie dostaje wymuszonej warstwy, a pierwszą
+       próbę dostaje dekoder sprzętowy: tak kanał 4K grał, zanim aplikacja
+       zaczęła się uczyć silników (patrz preferEngine, applyVideoLayerFix). */
+    uhdSeen: false,
+    /* czy przy tym kanale dekoder sprzętowy dostał już swoją próbę — jedno
+       przestawienie na kanał, żeby kolejka nie kręciła się w kółko */
+    uhdNativeTried: false,
     /* Jedna próba odtwarzania to nie wyścig z zegarem: liczymy, od kiedy trwa
        („entryWaitStart”) i kiedy strumień ostatnio naprawdę coś dociągnął
        („lastActivityAt”). Kanał 4K potrzebuje na pierwsze klatki dużo więcej
@@ -3346,11 +3354,11 @@
     });
     video.addEventListener("loadedmetadata", function () {
       noteStreamActivity();
-      /* Wymuszona warstwa obrazu (patrz applyVideoLayerFix) pomaga dekoderom,
-         które oddają sam dźwięk, ale przy 4K potrafi zostawić obraz czarny —
-         dlatego przy takim strumieniu zdejmujemy ją z obrazu. Dla SD/HD naprawa
-         włączy się znowu sama, gdy naprawdę będzie potrzebna. */
-      if (videoIsUhd()) applyVideoLayerFix(false);
+      /* Metadane mówią, jaka to rozdzielczość — od tego momentu wiemy, czy kanał
+         jest 4K. Taki kanał wraca do tego, jak grał, zanim aplikacja zaczęła się
+         uczyć silników: bez wymuszonej warstwy obrazu i ze sprzętowym dekoderem
+         na pierwszym miejscu (patrz noteUhd). */
+      if (videoIsUhd() && noteUhd()) return;
       /* obraz wczytał metadane — nie ma sensu czekać na kolejny sposób */
       clearStartWatchdog();
       notePicture();
@@ -3579,8 +3587,13 @@
         if (!data.fatal && !unplayable) return;
         handlePlaybackError(t("err_stream") + " (" + engineLabel("hls") + ": " + data.type + "/" + data.details + ")");
       });
-      hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
+      hls.on(window.Hls.Events.MANIFEST_PARSED, function (event, data) {
         if (state.engineToken !== token) return;
+        /* Manifest wie o strumieniu więcej niż obraz: przy HEVC 4K klatek nie ma
+           czasem wcale (MSE nie wciągnie tego kodeka i dekoder oddaje sam dźwięk),
+           a wysokość poziomu mówi o 4K od razu — dlatego 4K rozpoznajemy także
+           tutaj (patrz noteUhd). */
+        if (manifestIsUhd(data) && noteUhd()) return;
         var promise = video.play();
         if (promise && promise.catch) promise.catch(function () {});
       });
@@ -3721,6 +3734,85 @@
     return (video.videoHeight | 0) >= 1440 || (video.videoWidth | 0) >= 2560;
   }
 
+  /* To samo, ale z manifestu HLS: przy 4K HEVC dekoder potrafi oddać sam dźwięk,
+     więc wymiarów klatki nie ma wcale, a wysokość poziomu mówi o 4K od razu
+     (patrz noteUhd). */
+  function manifestIsUhd(data) {
+    var levels = (data && data.levels) || [];
+    for (var i = 0; i < levels.length; i++) {
+      if ((levels[i].height | 0) >= 1440 || (levels[i].width | 0) >= 2560) return true;
+    }
+    return false;
+  }
+
+  /* Czy ten adres da się podać odtwarzaczowi wprost: surowy .ts idzie sprzętowo
+     wszędzie, ale .m3u8 tylko tam, gdzie odbiornik ma własną obsługę HLS (webOS,
+     Safari). W Androidzie podanie .m3u8 do <video> kończy się błędem, więc nie ma
+     po co przestawiać na to kolejki (patrz startHlsSource). */
+  function nativeCanPlay(url) {
+    if (!/\.m3u8([?#]|$)/i.test(String(url || ""))) return true;
+    var video = $("video");
+    return !!video && !!video.canPlayType &&
+      !!video.canPlayType("application/vnd.apple.mpegurl");
+  }
+
+  /* Pierwszy wpis kolejki, który ten odbiornik zagra sprzętowo — dla 4K to
+     zwykle jedyna droga do obrazu. */
+  function nativeEntryIndex() {
+    for (var i = 0; i < state.sources.length; i++) {
+      if (state.sources[i].engine === "native" && nativeCanPlay(state.sources[i].url)) return i;
+    }
+    return -1;
+  }
+
+  /* Kanał okazał się 4K (metadane klatki albo manifest HLS — patrz videoIsUhd,
+     manifestIsUhd). Przy takim strumieniu wracamy do tego, jak grał, zanim
+     aplikacja zaczęła się uczyć silników (preferEngine, applyVideoLayerFix):
+
+       • zdejmujemy wymuszoną warstwę obrazu — przy 4K to ona zostawia czarny
+         ekran (dekoder coś składa, ale obraz nie trafia na ekran),
+       • bez obrazu pierwszą próbę oddajemy dekoderowi sprzętowemu, bo 4K,
+         a zwłaszcza HEVC, rozbiera praktycznie tylko on (mpegts.js i hls.js
+         wciągają do MSE zwykle sam dźwięk).
+
+     Klasę warstwy da się zdjąć tylko razem z elementem <video> — na gotowym
+     dekoderze samo jej zdjęcie nie pomaga (patrz resetVideoElement) — a sposób
+     odtwarzania, który już coś pokazuje, zostaje. Zwracamy true, gdy obraz jest
+     już przeładowywany: wołający nie może wtedy nic więcej robić ze starym
+     elementem. */
+  function noteUhd() {
+    state.uhdSeen = true;
+    var hasPicture = videoHasPicture($("video"));
+    var cleared = applyVideoLayerFix(false);
+    /* obraz gra i warstwy nie było czego zdejmować — nie ma czego naprawiać */
+    if (!cleared && hasPicture) return false;
+    /* obraz już coś pokazuje, więc nie zmieniamy sposobu odtwarzania: kolejna
+       próba tego samego wpisu kolejki, tylko na świeżym elemencie */
+    if (hasPicture) {
+      destroyEngine();
+      retryCurrentEntry();
+      return true;
+    }
+    /* obrazu nie ma: przestawiamy na dekoder sprzętowy (jedno przestawienie na
+       kanał, żeby kolejka nie kręciła się w kółko), a gdy nie ma na co —
+       powtarzamy ten sam wpis kolejki */
+    var switched = false;
+    if (state.engine !== "native" && !state.uhdNativeTried) {
+      var index = nativeEntryIndex();
+      if (index >= 0) {
+        state.uhdNativeTried = true;
+        state.sourceIndex = index;
+        switched = true;
+      }
+    }
+    /* nic nie zmieniliśmy: obrazu nie ma, ale to zwykła droga kolejki prób
+       (patrz budzik obrazu) — nie ma po co zaczynać kanału od nowa */
+    if (!cleared && !switched) return false;
+    destroyEngine();
+    retryCurrentEntry();
+    return true;
+  }
+
   function waitBudget() {
     if (videoIsUhd()) return UHD_WAIT;
     var video = $("video");
@@ -3767,9 +3859,10 @@
          coś robi, próbę przedłużamy, zamiast restartować ją od zera. */
       if (streamStillComing()) { armPictureWatchdog(token); return; }
       /* Warstwa obrazu pomaga dekoderom, które oddają sam dźwięk — ale przy 4K
-         był to tylko niepotrzebny restart ciężkiego strumienia, więc tam od
-         razu przechodzimy do następnego sposobu odtwarzania. */
-      if (!state.pictureRetried && !videoIsUhd() && applyVideoLayerFix(true)) {
+         była to tylko niepotrzebna zmiana ciężkiego obrazu (a sama warstwa
+         potrafi tam zostawić czarny ekran), więc kanał rozpoznany jako 4K od
+         razu przechodzi do następnego sposobu odtwarzania (patrz noteUhd). */
+      if (!state.pictureRetried && !videoIsUhd() && !state.uhdSeen && applyVideoLayerFix(true)) {
         state.pictureRetried = true;
         retryCurrentEntry(t("err_no_picture"));
         return;
@@ -3955,6 +4048,9 @@
     state.isArchive = !!program;
     state.retryCount = 0;
     state.cycle = 0;
+    /* nowy kanał: rozdzielczość i sprzętowa próba liczą się od zera */
+    state.uhdSeen = false;
+    state.uhdNativeTried = false;
     state.sourceIndex = -1;          /* -1 → pierwszy wpis wybierze nextSourceEntry() */
     state.watchChannel = channel;
     state.watchProgram = program || null;
