@@ -1754,6 +1754,123 @@ check("hls.js: pojedynczy zepsuty fragment nie konczy proby (strumien moze sie p
   cannotBox.hlsCannotPlay({}) === false,
   String(cannotBox.hlsCannotPlay({ reason: "Found no media in msn 12" })));
 
+/* --- 26. panel diagnostyki obrazu (dzwiek gra, a obrazu nie ma) ----------
+   Kanal 4K zostawial czarny ekran i z kanapy nie bylo widac dlaczego: dzwiek
+   gral, wiec odtwarzacz uznawal kanal za uruchomiony. Panel zbiera to, czego
+   nie widac (system odbiornika, kodeki, stan elementu <video>, manifest HLS),
+   a otwiera sie sam tylko w jednej sytuacji: dzwiek leci, a klatek nie ma. */
+check("panel diagnostyki jest nakladka nad obrazem, a nie kolejnym ekranem",
+  src.indexOf('panel.className = "diag-panel hidden"') > 0 &&
+  src.indexOf("document.body.appendChild(panel);") > 0 &&
+  css.indexOf(".diag-panel {") > 0 && css.indexOf(".diag-text {") > 0 &&
+  css.indexOf(".diag-panel.hidden { display: none; }") > 0 &&
+  /\.diag-panel\s*\{[^}]*z-index: 60/.test(css));
+
+check("panel otwiera przycisk na pasku odtwarzacza, a Wstecz zamyka go pierwszy",
+  src.indexOf('osdButton("diag", t("osd_diag"), toggleDiagnostics)') > 0 &&
+  src.indexOf("if (diagVisible()) {\n      closeDiagnostics();\n      return true;\n    }") > 0 &&
+  src.indexOf("function toggleDiagnostics()") > 0);
+
+check("panel ma wlasne klawisze: strzalki przewijaja tresc, zamiast zmieniac kanal",
+  src.indexOf('document.addEventListener("keydown", diagKeydown, true);') > 0 &&
+  src.indexOf("event.stopImmediatePropagation();\n      diagScroll(") > 0 &&
+  src.indexOf("if (text) text.scrollTop += direction * 80;") > 0);
+
+check("diagnostyka mowi to samo po polsku i po angielsku",
+  src.indexOf('diag_title: "Diagnostyka obrazu"') > 0 &&
+  src.indexOf('diag_title: "Picture diagnostics"') > 0 &&
+  /osd_diag: "[^"]*Diagnostyka"/.test(src) && /osd_diag: "[^"]*Diagnostics"/.test(src));
+
+/* Decyzja „otworzyc panel samemu” to cztery warunki naraz, wiec wyciagamy sama
+   funkcje i karmimy ja atrapami <video> — inaczej latwo otworzyc panel tam,
+   gdzie obraz po prostu jeszcze sie wczytuje (kanal 4K robi to kilka sekund). */
+const autoStart = src.indexOf("function maybeAutoDiagnose(reason) {");
+const autoEnd = src.indexOf("function nextEngineToken(");
+if (autoStart < 0 || autoEnd <= autoStart) throw new Error("Nie znalazlem maybeAutoDiagnose w app.js");
+const codeAuto = src.slice(autoStart, autoEnd);
+
+function autoHarness(o) {
+  o = o || {};
+  const calls = { opened: 0, notes: [] };
+  const sandbox = {
+    state: { diagAutoShown: o.autoShown === true },
+    diagVisible: function () { return o.panelOpen === true; },
+    $: function () { return o.noVideo ? null : (o.video || { paused: false, readyState: 4 }); },
+    videoHasPicture: function () { return o.picture === true; },
+    t: function (key) { return "<" + key + ">"; },
+    diagNote: function (label) { calls.notes.push(label); },
+    openDiagnostics: function () { calls.opened++; }
+  };
+  run(codeAuto, sandbox);
+  return { api: sandbox, calls: calls };
+}
+
+let ah = autoHarness({});
+check("dzwiek gra, a klatek nie ma: panel otwiera sie sam i tylko raz na kanal",
+  ah.api.maybeAutoDiagnose("<diag_auto>") === true && ah.calls.opened === 1 &&
+  ah.api.state.diagAutoShown === true && ah.calls.notes.join("|") === "<diag_auto>",
+  JSON.stringify(ah.calls));
+check("drugie wywolanie przy tym samym kanale nic nie otwiera",
+  ah.api.maybeAutoDiagnose("<diag_auto>") === false && ah.calls.opened === 1,
+  "otwarć: " + ah.calls.opened);
+
+ah = autoHarness({ picture: true });
+check("obraz jest (klatka ma wymiary): panel nie wchodzi na obraz",
+  ah.api.maybeAutoDiagnose("x") === false && ah.calls.opened === 0 &&
+  ah.api.state.diagAutoShown === false);
+
+ah = autoHarness({ video: { paused: true, readyState: 4 } });
+check("zatrzymany obraz to nie „brak obrazu”",
+  ah.api.maybeAutoDiagnose("x") === false && ah.calls.opened === 0);
+
+ah = autoHarness({ video: { paused: false, readyState: 1 } });
+check("dane jeszcze nie doszly (same metadane albo nic): jeszcze nie oceniamy",
+  ah.api.maybeAutoDiagnose("x") === false && ah.calls.opened === 0);
+
+ah = autoHarness({ noVideo: true });
+check("brak elementu <video>: nie ma czego diagnozowac",
+  ah.api.maybeAutoDiagnose("x") === false && ah.calls.opened === 0);
+
+ah = autoHarness({ panelOpen: true });
+check("panel otwarty recznie zostaje otwarty — nic nie otwieramy drugi raz",
+  ah.api.maybeAutoDiagnose("x") === false && ah.calls.opened === 0 &&
+  ah.api.state.diagAutoShown === false);
+
+check("panel uzbraja sie na starcie dzwieku i przed zmiana sposobu odtwarzania",
+  src.indexOf("var DIAG_AUTO_DELAY = 8000;") > 0 &&
+  src.indexOf("armDiagAuto();\n      /* Dźwięk wystartował") > 0 &&
+  src.indexOf("maybeAutoDiagnose(t(\"diag_auto\"));\n\n    var attempts = parseInt(settings.retryAttempts, 10) || 0;") > 0);
+
+check("nowy kanal gasi budzik panelu (panel nie wchodzi w srodku wczytywania)",
+  src.indexOf("clearTimeout(state.diagAutoTimer);\n    state.diagAutoTimer = null;") > 0 &&
+  src.indexOf("state.diagAutoShown = false;") > 0);
+
+check("panel otwarty sam schodzi z drogi, gdy obraz sie jednak pojawi",
+  src.indexOf("if (state.diagAutoShown && videoHasPicture($(\"video\"))) {\n        closeDiagnostics();") > 0);
+
+/* sondowanie manifestu HLS: .ts leci bez konca, wiec pytamy o ten sam adres
+   z rozszerzeniem .m3u8; atrybuty czytamy razem z cudzyslowem w srodku */
+const urlStart = src.indexOf("function diagManifestUrl(url)");
+const urlEnd = src.indexOf("function diagAttributes(text)");
+if (urlStart < 0 || urlEnd <= urlStart) throw new Error("Nie znalazlem diagManifestUrl w app.js");
+const urlBox = run(src.slice(urlStart, urlEnd), {});
+check("sondowanie manifestu nie trafia na sam strumien .ts",
+  urlBox.diagManifestUrl("http://s/live/u/p/12345.ts") === "http://s/live/u/p/12345.m3u8" &&
+  urlBox.diagManifestUrl("http://s/x.m3u8?token=1") === "http://s/x.m3u8?token=1" &&
+  urlBox.diagManifestUrl("http://s/live/u/p/12345") === "" &&
+  urlBox.diagManifestUrl("") === "",
+  JSON.stringify([urlBox.diagManifestUrl("http://s/live/u/p/12345.ts"),
+    urlBox.diagManifestUrl("http://s/live/u/p/12345")]));
+
+const attrStart = src.indexOf("function diagAttributes(text)");
+const attrEnd = src.indexOf("function diagManifestInfo(text)");
+if (attrStart < 0 || attrEnd <= attrStart) throw new Error("Nie znalazlem diagAttributes w app.js");
+const attrBox = run(src.slice(attrStart, attrEnd), {});
+const attrs = attrBox.diagAttributes('RESOLUTION=3840x2160,FRAME-RATE=50.000,CODECS="hvc1.1.6.L153,mp4a.40.2"');
+check("atrybuty manifestu czytane z cudzyslowem w srodku (kodek 4K HEVC ma przecinek)",
+  attrs.RESOLUTION === "3840x2160" && attrs["FRAME-RATE"] === "50.000" &&
+  attrs.CODECS === "hvc1.1.6.L153,mp4a.40.2", JSON.stringify(attrs));
+
 console.log("");
 if (fails) { console.log("BLEDY: " + fails); process.exit(1); }
 console.log("Wszystkie sprawdzenia przeszly.");

@@ -118,10 +118,19 @@ się jednak raz.
 
 Pasek na dole obrazu pokazuje to, co da się zrobić w danym momencie:
 `Pauza`/`Wznów`, `Od początku`, `◀ Poprzedni` i `Następny ▶` (w archiwum),
-`EPG`, `Na żywo` (gdy obraz nie jest na żywo) i `Wycisz`. Menu opcji kanału
-i wyjście do listy są poza paskiem na telewizorze — tam są pod `MENU` /
-trzymanym `OK` i pod klawiszem `Wstecz`, więc nie dublują się na ekranie. Na
-telefonie i tablecie oba te przyciski zostają na pasku, bo tam nie ma pilota.
+`EPG`, `Na żywo` (gdy obraz nie jest na żywo), `Wycisz` i `ⓘ Diagnostyka`.
+Menu opcji kanału i wyjście do listy są poza paskiem na telewizorze — tam są
+pod `MENU` / trzymanym `OK` i pod klawiszem `Wstecz`, więc nie dublują się na
+ekranie. Na telefonie i tablecie oba te przyciski zostają na pasku, bo tam nie
+ma pilota.
+
+`ⓘ Diagnostyka` pokazuje nad obrazem, co widzi odbiornik: system i przeglądarkę
+wbudowaną, kodeki, które ten odtwarzacz potrafi rozebrać, stan elementu obrazu
+(gotowość, wymiary klatki, liczba klatek) oraz co naprawdę nadaje dostawca
+(manifest HLS). Panel otwiera się też sam, gdy dźwięk już leci, a obrazu nie ma
+ani jednej klatki — to jedyny przypadek, w którym wchodzi w drogę; gdy obraz
+się pojawi, schodzi sam. Treść przewija się strzałkami, a `Wstecz` zamyka panel
+jako pierwszy.
 
 Pasek otwarty klawiszem `OK` to menu: `▲` `▼` wchodzą wtedy w jego przyciski
 (`⏸ Pauza`, `📅 EPG`…), a `◀` `▶` chodzą po nich. Z paska wychodzi się `▲` `▼`

@@ -1161,3 +1161,69 @@ body.uimode-touch .guide-channel span { font-size: 17px; }
 /* nazwa kanału w dwóch liniach też się mieści (wiersz ma 96 px) */
 .guide-channel { line-height: 1.25; }
 
+/* ==========================================================================
+   2.1.0 — diagnostyka obrazu: panel nad obrazem dla przypadku „dźwięk gra,
+   a obrazu nie ma ani jednej klatki”
+   Panel pokazuje to, czego z kanapy nie widać: system i WebView odbiornika,
+   kodeki, które ten odtwarzacz potrafi rozebrać, stan elementu <video>
+   (gotowość, błąd, liczba klatek) oraz co naprawdę nadaje dostawca (manifest
+   HLS). Treść jest do zdjęcia telefonem, więc czyta się jak wydruk: równy
+   tekst, gęste wiersze, przewijanie pilotem (▲ ▼). Otwiera się z paska
+   odtwarzacza („ⓘ Diagnostyka”) i sam, gdy dźwięk leci bez obrazu.
+   ========================================================================== */
+
+.diag-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 60;               /* nad paskiem odtwarzacza i nad menu opcji (40) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(4, 6, 10, .88);
+}
+.diag-panel.hidden { display: none; }
+
+.diag-card {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 94vw);
+  max-height: 92vh;
+  padding: 20px 26px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, .6);
+}
+.diag-title { margin: 0 0 10px; font-size: 26px; font-weight: 700; }
+
+/* wydruk do zdjęcia: tekst równy, bez zawijania, przewijany w pionie —
+   ▲ ▼ przewijają treść (patrz diagScroll w app.js) */
+.diag-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 14px 16px;
+  overflow-y: auto;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+  font-size: 16px;
+  line-height: 1.45;
+  white-space: pre;
+  color: var(--text);
+  background: var(--surface-2);
+  border-radius: 12px;
+}
+.diag-hint { margin: 10px 0 12px; font-size: 15px; color: var(--muted); }
+/* przycisk zamykania nie rośnie na wysokość razem z treścią panelu */
+.diag-card .ctx-actions { flex: none; }
+.diag-card .ctx-actions button { text-align: center; }
+
+body.uimode-tv .diag-title { font-size: 30px; }
+body.uimode-tv .diag-text { font-size: 19px; line-height: 1.5; }
+body.uimode-tv .diag-hint { font-size: 17px; }
+
+/* na dotykowym ekranie panel zostaje przewijany palcem — treść nie może
+   wychodzić poza kartę (przy `white-space: pre` szeroka linia przewija się
+   w bok, a nie łamie) */
+body.uimode-touch .diag-text { overflow: auto; }
+

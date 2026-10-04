@@ -20,6 +20,13 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.0] — 2026-10-04
+
+### Dodano
+- **Diagnostyka obrazu na pasku odtwarzacza** — przycisk `ⓘ Diagnostyka` otwiera nad obrazem raport z tego, co widzi odbiornik: system i wbudowaną przeglądarkę, obsługę kodeków, gotowość i liczbę klatek obrazu oraz to, co naprawdę nadaje dostawca w manifeście HLS.
+- **Panel wchodzi sam, gdy dźwięk gra, a obrazu nie ma** — gdy od startu dźwięku minie osiem sekund bez ani jednej klatki, raport otwiera się bez pytania i schodzi sam, gdy obraz się pojawi.
+- **Raport przewija się strzałkami, a `Wstecz` zamyka go jako pierwszy** — dłuższa treść nie zasłania obrazu na stałe i po jej obejrzeniu wraca się do kanału jednym klawiszem.
+
 ## [2.0.6] — 2026-10-04
 
 ### Poprawiono

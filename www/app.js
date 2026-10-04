@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.0.6";
+  var APP_VERSION = "2.1.0";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -159,6 +159,12 @@
     /* czy przy tym kanale dekoder sprzętowy dostał już swoją próbę — jedno
        przestawienie na kanał, żeby kolejka nie kręciła się w kółko */
     uhdNativeTried: false,
+    /* Panel diagnostyki obrazu pokazał się już sam przy tym kanale (dźwięk gra,
+       a klatki nie ma) — bez tej blokady wracałby po każdym nieudanym sposobie
+       odtwarzania (patrz maybeAutoDiagnose). Budzik panelu liczy się od startu
+       dźwięku, więc trzyma go ten sam stan co reszta budzików (armDiagAuto). */
+    diagAutoShown: false,
+    diagAutoTimer: null,
     /* Jedna próba odtwarzania to nie wyścig z zegarem: liczymy, od kiedy trwa
        („entryWaitStart”) i kiedy strumień ostatnio naprawdę coś dociągnął
        („lastActivityAt”). Kanał 4K potrzebuje na pierwsze klatki dużo więcej
@@ -353,6 +359,7 @@
     osd_paused: "PAUZA",
     osd_epg: "📅 EPG",
     osd_mute: "🔇 Wycisz",
+    osd_diag: "ⓘ Diagnostyka",
     osd_unmute: "🔊 Dźwięk",
     osd_muted: "WYCISZONE",
     ctx_menu: "Kanał",
@@ -370,6 +377,33 @@
     retry_engine_hls: "Próbuję odtwarzacz HLS…",
     engine_mse: "TS/MSE", engine_hls: "HLS",
     engine_native: "natywnie",
+    /* panel diagnostyki obrazu (czarny ekran) — patrz openDiagnostics */
+    osd_diag: "ⓘ Diagnostyka",
+    diag_title: "Diagnostyka obrazu",
+    diag_hint: "Zdjęcie tego ekranu wystarczy, żeby zgłosić problem. ▲ ▼ przewija treść, Wstecz zamyka.",
+    diag_close: "✕ Zamknij",
+    diag_device: "URZĄDZENIE",
+    diag_codecs: "KODEKI — CO POTRAFI TEN ODTWARZACZ",
+    diag_stream: "STRUMIEŃ",
+    diag_manifest: "MANIFEST HLS",
+    diag_events: "DZIENNIK ZDARZEŃ",
+    diag_yes: "tak", diag_no: "nie", diag_maybe: "może", diag_unknown: "?",
+    diag_platform: "system", diag_native_app: "aplikacja natywna",
+    diag_screen: "ekran", diag_window: "okno", diag_cores: "rdzenie",
+    diag_pointer: "dotyk", diag_webview: "WebView", diag_ua: "identyfikator",
+    diag_container: "kontenery",
+    diag_channel: "kanał", diag_engine: "sposób odtwarzania", diag_entry: "próba",
+    diag_retries: "powtórzenia", diag_layer: "warstwa obrazu", diag_uhd: "4K",
+    diag_size: "obraz", diag_frames: "klatki", diag_dropped: "odrzucone",
+    diag_audio: "dźwięk", diag_playing: "gra", diag_paused: "pauza",
+    diag_time: "czas", diag_buffer: "bufor", diag_muted: "wyciszony",
+    diag_error: "błąd", diag_none: "brak",
+    diag_probing: "sondowanie…", diag_opened: "panel otwarty",
+    diag_auto: "brak obrazu przy grającym dźwięku — panel otwarty sam",
+    diag_probe_none: "brak adresu .m3u8 do sprawdzenia",
+    diag_probe_failed: "nie udało się pobrać manifestu",
+    diag_probe_media: "playlista z segmentami", diag_probe_codec: "kodek z manifestu",
+    diag_encrypted: "zaszyfrowany (EXT-X-KEY)", diag_variants: "wariantów",
     epg_none: "Brak danych EPG dla tego kanału.",
     archive_day_today: "Dziś", archive_day_yesterday: "Wczoraj", archive_day_before: "Przedwczoraj",
     archive_limited: "pokazano {shown} z {total}",
@@ -560,6 +594,7 @@
     osd_paused: "PAUSED",
     osd_epg: "📅 EPG",
     osd_mute: "🔇 Mute",
+    osd_diag: "ⓘ Diagnostics",
     osd_unmute: "🔊 Sound",
     osd_muted: "MUTED",
     ctx_menu: "Channel",
@@ -577,6 +612,33 @@
     retry_engine_hls: "Trying the HLS player…",
     engine_mse: "TS/MSE", engine_hls: "HLS",
     engine_native: "native",
+    /* picture diagnostics panel (black screen) — see openDiagnostics */
+    osd_diag: "ⓘ Diagnostics",
+    diag_title: "Picture diagnostics",
+    diag_hint: "A photo of this screen is enough to report the problem. ▲ ▼ scrolls, Back closes.",
+    diag_close: "✕ Close",
+    diag_device: "DEVICE",
+    diag_codecs: "CODECS — WHAT THIS PLAYER CAN DO",
+    diag_stream: "STREAM",
+    diag_manifest: "HLS MANIFEST",
+    diag_events: "EVENT LOG",
+    diag_yes: "yes", diag_no: "no", diag_maybe: "maybe", diag_unknown: "?",
+    diag_platform: "system", diag_native_app: "native app",
+    diag_screen: "screen", diag_window: "window", diag_cores: "cores",
+    diag_pointer: "touch", diag_webview: "WebView", diag_ua: "identity",
+    diag_container: "containers",
+    diag_channel: "channel", diag_engine: "playback path", diag_entry: "attempt",
+    diag_retries: "retries", diag_layer: "picture layer", diag_uhd: "4K",
+    diag_size: "picture", diag_frames: "frames", diag_dropped: "dropped",
+    diag_audio: "audio", diag_playing: "playing", diag_paused: "paused",
+    diag_time: "time", diag_buffer: "buffer", diag_muted: "muted",
+    diag_error: "error", diag_none: "none",
+    diag_probing: "probing…", diag_opened: "panel opened",
+    diag_auto: "audio playing with no picture — panel opened on its own",
+    diag_probe_none: "no .m3u8 address to check",
+    diag_probe_failed: "could not fetch the manifest",
+    diag_probe_media: "media playlist with segments", diag_probe_codec: "codec from manifest",
+    diag_encrypted: "encrypted (EXT-X-KEY)", diag_variants: "variants",
     epg_none: "No EPG data for this channel.",
     archive_day_today: "Today", archive_day_yesterday: "Yesterday", archive_day_before: "2 days ago",
     archive_limited: "showing {shown} of {total}",
@@ -702,6 +764,7 @@
     mute: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M22 9l-6 6M16 9l6 6"/>',
     volume: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 6a9 9 0 0 1 0 12"/>',
     close: '<path d="M18 6L6 18M6 6l12 12"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11.2v5.4"/><circle fill="currentColor" stroke="none" cx="12" cy="7.6" r="1.2"/>',
     power: '<path d="M18.4 6.6a9 9 0 1 1-12.8 0"/><path d="M12 2.5v9"/>',
     swap: '<path d="M8 3v18M4 7l4-4 4 4M16 21V3M12 17l4 4 4-4"/>',
     check: '<path d="M20 6L9 17l-5-5"/>'
@@ -712,7 +775,7 @@
     "⏵": "play", "⏸": "pause", "⏹": "stop", "⏪": "rewind", "⏩": "forward",
     "◀": "prev", "▶": "next", "★": "star-filled", "☆": "star",
     "📅": "calendar", "🔇": "mute", "🔊": "volume", "✕": "close",
-    "⏻": "power", "⇅": "swap", "✓": "check"
+    "⏻": "power", "⇅": "swap", "✓": "check", "ⓘ": "info"
   };
 
   /* emoji trzymają się parami znaków (📅 = D83D DCC5), dlatego próbujemy dwa
@@ -3296,10 +3359,21 @@
   }
 
   function bindVideoEvents(video) {
+    /* Dziennik zdarzeń dla panelu diagnostyki: nazwa, gotowość i wymiary klatki —
+       po tym widać, czy dekoder stanął na metadanych, czy w ogóle nie doszedł do
+       obrazu (patrz diagEventLogger). */
+    ["playing", "loadedmetadata", "canplay", "waiting", "seeked", "stalled",
+      "suspend", "error", "ended"].forEach(function (name) {
+        video.addEventListener(name, diagEventLogger(name, video));
+      });
+
     video.addEventListener("playing", function () {
       noteStreamActivity();
       $("playerError").classList.add("hidden");
       clearStartWatchdog();
+      /* dźwięk naprawdę ruszył — od tego miejsca pilnujemy, czy dojdzie do tego
+         obraz; jeśli nie, panel diagnostyki otworzy się sam (armDiagAuto) */
+      armDiagAuto();
       /* Dźwięk wystartował, ale to jeszcze nie znaczy, że jest obraz —
          dopiero on zdejmuje budzik obrazu (patrz notePicture). */
       notePicture();
@@ -3458,6 +3532,492 @@
     if (engine === "mse") return t("engine_mse");
     if (engine === "hls") return t("engine_hls");
     return t("live");
+  }
+
+  /* =========================  DIAGNOSTYKA OBRAZU  =========================
+     Panel dla przypadku, którego z kanapy nie widać: dźwięk leci, a obrazu nie
+     ma ani jednej klatki. Pokazuje to, czego nie da się odczytać z ekranu
+     telewizora — na czym stoi odbiornik (system, WebView, ekran), które kodeki
+     ten odtwarzacz potrafi rozebrać (natywnie i przez MSE) oraz co robi sam
+     element <video>: gotowość, błąd i liczbę oddanych klatek. Do tego
+     sondowanie manifestu HLS mówi, co to naprawdę za strumień (kodek,
+     rozdzielczość, liczba klatek na sekundę) — dopiero te dwie rzeczy razem
+     odpowiadają, czy obraz ma prawo się pojawić.
+
+     Panel otwiera się z paska odtwarzacza („ⓘ Diagnostyka”) i sam, gdy budzik
+     obrazu widzi dźwięk bez ani jednej klatki (patrz maybeAutoDiagnose).
+     Treść jest do zdjęcia telefonem: w telewizorze nie ma schowka ani pliku,
+     do którego można by zajrzeć. */
+
+  var DIAG_LOG_MAX = 14;           /* ile ostatnich zdarzeń <video> pamiętamy */
+  var DIAG_PROBE_TIMEOUT = 8000;   /* ile czekamy na manifest HLS */
+
+  var diagEvents = [];         /* { at: ms, label: „…” } — najnowsze na końcu */
+  var diagManifest = "";       /* opis manifestu HLS albo komunikat błędu */
+  var diagManifestFor = "";    /* adres, którego dotyczy diagManifest */
+  var diagProbing = false;
+  var diagShown = "";          /* ostatnio pokazany tekst — bez przerysowań */
+  var diagTicker = null;       /* zegar odświeżający liczby w otwartym panelu */
+
+  /* Ostatnie zdarzenia trafiają do dziennika panelu. Wołane z gorących miejsc
+     odtwarzacza (zdarzenia <video>, start silnika), więc tylko dopisuje wiersz —
+     ekran odświeża osobny zegar (patrz startDiagTicker). */
+  function diagNote(label) {
+    diagEvents.push({ at: Date.now(), label: String(label) });
+    if (diagEvents.length > DIAG_LOG_MAX) diagEvents.shift();
+  }
+
+  /* Zdarzenie <video> widziane z panelu: nazwa, gotowość i wymiary klatki — po
+     tym widać, czy dekoder stanął na metadanych, czy w ogóle nie doszedł do
+     obrazu (dźwięk gra także wtedy, gdy klatek nie ma). */
+  function diagEventLogger(name, video) {
+    return function () {
+      var current = video || $("video");
+      diagNote(name + " · readyState " + (current ? (current.readyState | 0) : "?") +
+        " · " + (current ? ((current.videoWidth | 0) + "×" + (current.videoHeight | 0)) : "?"));
+    };
+  }
+
+  function diagClock(at) {
+    var date = new Date(at);
+    return pad2(date.getHours()) + ":" + pad2(date.getMinutes()) + ":" + pad2(date.getSeconds());
+  }
+
+  function diagSeconds(value) {
+    var seconds = Number(value);
+    if (!isFinite(seconds) || seconds < 0) return "0.0";
+    return seconds.toFixed(1);
+  }
+
+  /* Ile klatek dekoder naprawdę oddał — przy czarnym obrazie to jedyny dowód,
+     że cokolwiek rozebrał. */
+  function diagFrames(video) {
+    var quality = null;
+    if (video && video.getVideoPlaybackQuality) {
+      try { quality = video.getVideoPlaybackQuality(); } catch (error) { quality = null; }
+    }
+    if (quality) {
+      return {
+        total: quality.totalVideoFrames | 0,
+        dropped: quality.droppedVideoFrames | 0
+      };
+    }
+    return {
+      total: (video && video.webkitDecodedFrameCount) | 0,
+      dropped: (video && video.webkitDroppedFrameCount) | 0
+    };
+  }
+
+  /* Ile sekund obrazu jest już pobrane przed bieżącą chwilą. */
+  function diagBuffered(video) {
+    if (!video || !video.buffered || !video.buffered.length) return "0.0";
+    var at = video.currentTime || 0;
+    for (var i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) <= at && video.buffered.end(i) >= at) {
+        return diagSeconds(video.buffered.end(i) - at);
+      }
+    }
+    return "0.0";
+  }
+
+  function diagMediaError(video) {
+    var error = video && video.error;
+    if (!error) return t("diag_none");
+    var names = { 1: "aborted", 2: "network", 3: "decode", 4: "not supported" };
+    var name = names[error.code | 0] ? " " + names[error.code | 0] : "";
+    return (error.code | 0) + name +
+      (error.message ? " · " + String(error.message).slice(0, 90) : "");
+  }
+
+  /* Co potrafi ten odtwarzacz: canPlayType to droga natywna, MSE — droga
+     mpegts.js i hls.js (własny demukser). Bez tej tabeli nie da się
+     powiedzieć, czy czarny ekran to wina kanału, czy dekodera. */
+  function diagSupport(type) {
+    var probe = document.createElement("video");
+    var native = probe.canPlayType ? String(probe.canPlayType(type)) : "";
+    var mse = t("diag_no");
+    if (window.MediaSource && window.MediaSource.isTypeSupported) {
+      try { mse = window.MediaSource.isTypeSupported(type) ? t("diag_yes") : t("diag_no"); }
+      catch (error) { mse = t("diag_unknown"); }
+    }
+    var labels = { "": t("diag_no"), maybe: t("diag_maybe"), probably: t("diag_yes") };
+    return { native: labels[native] || native, mse: mse };
+  }
+
+  /* ---- linie treści panelu: urządzenie, kodeki, strumień, manifest, dziennik ----
+
+     Próbki kodeków: 4K H.264 (to, co nadaje większość dostawców) oraz HEVC,
+     którym nadaje się kanały 4K — jeśli tu jest „nie”, obrazu nie będzie. */
+  var DIAG_CODECS = [
+    { name: "H.264 1080p", type: 'video/mp4; codecs="avc1.640028"' },
+    { name: "H.264 4K", type: 'video/mp4; codecs="avc1.640034"' },
+    { name: "HEVC 4K (hvc1)", type: 'video/mp4; codecs="hvc1.1.6.L150.B0"' },
+    { name: "HEVC 4K (hev1)", type: 'video/mp4; codecs="hev1.1.6.L150.B0"' },
+    { name: "HEVC Main10", type: 'video/mp4; codecs="hvc1.2.4.L153.B0"' }
+  ];
+
+  function diagWebView() {
+    var match = /(Chrome|Chromium)\/([\d.]+)/.exec(navigator.userAgent || "");
+    if (match) return match[1] + " " + match[2];
+    return String(navigator.userAgent || "").slice(0, 60);
+  }
+
+  function diagDeviceLines() {
+    var screenRef = window.screen || {};
+    var lines = [t("diag_device")];
+    lines.push(" " + t("diag_platform") + ": " + platformName() + " (" + platformInfo.os +
+      ") · " + t("diag_native_app") + ": " + (platformInfo.native ? t("diag_yes") : t("diag_no")));
+    lines.push(" " + t("diag_screen") + ": " + (screenRef.width | 0) + "×" + (screenRef.height | 0) +
+      " @" + (window.devicePixelRatio || 1) +
+      " · " + t("diag_window") + ": " + (window.innerWidth | 0) + "×" + (window.innerHeight | 0) +
+      " · " + t("diag_cores") + ": " + (navigator.hardwareConcurrency || "?") +
+      " · " + t("diag_pointer") + ": " + (platformInfo.touch ? t("diag_yes") : t("diag_no")));
+    lines.push(" " + t("diag_webview") + ": " + diagWebView() +
+      " · " + t("diag_ua") + ": " + String(navigator.userAgent || "").slice(0, 150));
+    return lines;
+  }
+
+  function diagCodecLines() {
+    var lines = [t("diag_codecs")];
+    for (var i = 0; i < DIAG_CODECS.length; i++) {
+      var support = diagSupport(DIAG_CODECS[i].type);
+      lines.push(" " + DIAG_CODECS[i].name + " — <video>: " + support.native +
+        " · MSE: " + support.mse);
+    }
+    lines.push(" " + t("diag_container") + ": HLS (.m3u8) " +
+      diagSupport("application/vnd.apple.mpegurl").native +
+      " · TS (video/mp2t) " + diagSupport("video/mp2t").native);
+    return lines;
+  }
+
+  function diagStreamLines() {
+    var lines = [t("diag_stream")];
+    if (!state.watchChannel) {
+      lines.push(" " + t("diag_none"));
+      return lines;
+    }
+    lines.push(" " + t("diag_channel") + ": " + state.watchChannel.name);
+    lines.push(" " + t("diag_engine") + ": " + engineName(state.engine) +
+      " · " + t("diag_entry") + ": " + ((state.sourceIndex | 0) + 1) + "/" + state.sources.length +
+      " · " + t("diag_retries") + ": " + (state.retryCount | 0) +
+      " · " + t("diag_layer") + ": " +
+      (document.body.classList.contains("video-layer-fix") ? t("diag_yes") : t("diag_no")));
+    lines.push(" " + t("diag_uhd") + " (" + t("diag_size") + "): " +
+      (videoIsUhd() ? t("diag_yes") : t("diag_no")));
+
+    var video = $("video");
+    if (!video) {
+      lines.push(" <video>: " + t("diag_none"));
+      return lines;
+    }
+    var frames = diagFrames(video);
+    lines.push(" " + t("diag_size") + ": " + (video.videoWidth | 0) + "×" + (video.videoHeight | 0) +
+      " · " + t("diag_frames") + ": " + frames.total +
+      " (" + t("diag_dropped") + ": " + frames.dropped + ")");
+    lines.push(" " + t("diag_audio") + ": " + (video.paused ? t("diag_paused") : t("diag_playing")) +
+      " · " + t("diag_time") + ": " + diagSeconds(video.currentTime) + " s" +
+      " · " + t("diag_buffer") + ": " + diagBuffered(video) + " s" +
+      " · " + t("diag_muted") + ": " + (video.muted ? t("diag_yes") : t("diag_no")));
+    lines.push(" readyState: " + (video.readyState | 0) + " · networkState: " + (video.networkState | 0) +
+      " · " + t("diag_error") + ": " + diagMediaError(video));
+    lines.push(" " + maskUrl(state.currentSource || ""));
+    return lines;
+  }
+
+  function diagManifestLines() {
+    return [t("diag_manifest"), " " + (diagManifest || t("diag_probing"))];
+  }
+
+  function diagEventLines() {
+    var lines = [t("diag_events")];
+    if (!diagEvents.length) {
+      lines.push(" " + t("diag_none"));
+      return lines;
+    }
+    for (var i = 0; i < diagEvents.length; i++) {
+      lines.push(" " + diagClock(diagEvents[i].at) + "  " + diagEvents[i].label);
+    }
+    return lines;
+  }
+
+  function diagText() {
+    var lines = ["TeleIPTV v" + APP_VERSION + " · " + diagClock(Date.now()), ""];
+    lines = lines.concat(diagDeviceLines(), [""]);
+    lines = lines.concat(diagCodecLines(), [""]);
+    lines = lines.concat(diagStreamLines(), [""]);
+    lines = lines.concat(diagManifestLines(), [""]);
+    lines = lines.concat(diagEventLines());
+    return lines.join("\n");
+  }
+
+  /* ---- sam panel: treść nad obrazem, własne klawisze, sondowanie manifestu ---- */
+
+  function diagVisible() {
+    var panel = $("diagPanel");
+    return !!panel && !panel.classList.contains("hidden");
+  }
+
+  /* Panel powstaje przy pierwszym otwarciu i zostaje w DOM — kolejne otwarcia
+     tylko go pokazują. Trzymamy go poza listą SCREENS: to nakładka nad tym, co
+     jest na ekranie (obraz, ustawienia), a nie kolejny ekran do przełączania. */
+  function diagPanel() {
+    var panel = $("diagPanel");
+    if (panel) return panel;
+
+    panel = document.createElement("section");
+    panel.id = "diagPanel";
+    panel.className = "diag-panel hidden";
+
+    var card = document.createElement("div");
+    card.className = "diag-card";
+
+    var title = document.createElement("h2");
+    title.className = "diag-title";
+    title.textContent = t("diag_title");
+    card.appendChild(title);
+
+    var text = document.createElement("pre");
+    text.id = "diagText";
+    text.className = "diag-text";
+    card.appendChild(text);
+
+    var hint = document.createElement("p");
+    hint.className = "diag-hint";
+    hint.textContent = t("diag_hint");
+    card.appendChild(hint);
+
+    var actions = document.createElement("div");
+    actions.className = "ctx-actions";
+    actions.appendChild(ctxButton(t("diag_close"), closeDiagnostics));
+    card.appendChild(actions);
+
+    panel.appendChild(card);
+    document.body.appendChild(panel);
+    return panel;
+  }
+
+  function renderDiagnostics() {
+    var text = $("diagText");
+    if (!text) return;
+    var value = diagText();
+    if (value === diagShown) return;      /* nic się nie zmieniło — bez przerysowań */
+    diagShown = value;
+    text.textContent = value;
+  }
+
+  function startDiagTicker() {
+    stopDiagTicker();
+    /* Liczby w panelu (klatki, bufor, readyState) zmieniają się w tle, więc
+       odświeżamy je raz na sekundę — to jedyne miejsce, które przerysowuje
+       ekran; dziennik tylko dopisuje wiersze (patrz diagNote). */
+    diagTicker = setInterval(function () {
+      /* Obraz jednak się pojawił — panel otwarty sam schodzi z drogi, żeby nie
+         zasłaniać tego, co właśnie się naprawiło. Panel otwarty ręcznie zostaje:
+         ktoś czyta go na własne życzenie. Drugi raz sam się nie otworzy przy
+         tym kanale (diagAutoShown), bo obraz już tu raz był. */
+      if (state.diagAutoShown && videoHasPicture($("video"))) {
+        closeDiagnostics();
+        return;
+      }
+      renderDiagnostics();
+    }, 1000);
+  }
+
+  function stopDiagTicker() {
+    if (diagTicker) clearInterval(diagTicker);
+    diagTicker = null;
+  }
+
+  /* Klawisze panelu łapiemy w fazie przechwytywania i nie puszczamy dalej: pod
+     spodem jest odtwarzacz, w którym te same strzałki zmieniałyby kanał. */
+  function diagKeydown(event) {
+    var key = event.keyCode;
+    if (key === 38 || key === 40 || key === 33 || key === 34) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      diagScroll(key === 38 || key === 33 ? -1 : 1);
+      return;
+    }
+    if (key === 13 || key === 23 || key === 66 || key === 27 || key === 8 ||
+        key === 4 || key === 461) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeDiagnostics();
+    }
+  }
+
+  function diagScroll(direction) {
+    var text = $("diagText");
+    if (text) text.scrollTop += direction * 80;
+  }
+
+  function openDiagnostics() {
+    var panel = diagPanel();
+    panel.classList.remove("hidden");
+    diagNote(t("diag_opened"));
+    diagProbeStream();
+    renderDiagnostics();
+    startDiagTicker();
+    /* Zamykanie musi mieć na czym stanąć: fokus zostawiony pod panelem
+       (na przycisku paska) nie dałby się przesunąć wzrokiem na treść. */
+    document.addEventListener("keydown", diagKeydown, true);
+    var close = panel.querySelector("button");
+    if (close && close.focus) close.focus();
+  }
+
+  function closeDiagnostics() {
+    var panel = $("diagPanel");
+    document.removeEventListener("keydown", diagKeydown, true);
+    stopDiagTicker();
+    if (panel) panel.classList.add("hidden");
+  }
+
+  function toggleDiagnostics() {
+    if (diagVisible()) closeDiagnostics();
+    else openDiagnostics();
+  }
+
+  /* ---- sondowanie manifestu HLS (co naprawdę nadaje dostawca) ---- */
+
+  /* Adres manifestu dla tego, co gra, tą samą drogą co kolejka prób: .m3u8,
+     a przy surowym .ts ten sam adres z rozszerzeniem .m3u8. Sondowanie nie może
+     trafić na sam strumień — .ts leci bez końca, a m3u8 to kilka linijek. */
+  function diagManifestUrl(url) {
+    var value = String(url || "");
+    if (/\.m3u8([?#]|$)/i.test(value)) return value;
+    if (/\.ts([?#]|$)/i.test(value)) return value.replace(/\.ts([?#]|$)/i, ".m3u8$1");
+    return "";
+  }
+
+  /* Atrybuty linii #EXT-X-… (RESOLUTION=1920x1080, CODECS="…", …) — wartości
+     bywają w cudzysłowie i same zawierają przecinki, więc nie wystarczy
+     dzielenie po przecinku. */
+  function diagAttributes(text) {
+    var result = {};
+    var pattern = /([A-Z0-9-]+)=("[^"]*"|[^,]*)/g;
+    var match;
+    while ((match = pattern.exec(text))) {
+      result[match[1]] = match[2].replace(/"/g, "");
+    }
+    return result;
+  }
+
+  /* Co mówi manifest: rozdzielczość, liczba klatek i kodek pierwszego wariantu,
+     a do tego rodzaj segmentów i informacja o szyfrowaniu. Kodek sprawdzamy od
+     razu z tabelą możliwości odtwarzacza — to jest odpowiedź na pytanie, czy
+     obraz może się pojawić. */
+  function diagManifestInfo(text) {
+    var lines = String(text || "").split(/\r?\n/);
+    var streams = [];
+    var map = false;
+    var segments = "";
+    var encrypted = false;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      if (line.indexOf("#EXT-X-STREAM-INF:") === 0) {
+        streams.push(diagAttributes(line.slice("#EXT-X-STREAM-INF:".length)));
+      } else if (line.indexOf("#EXT-X-MAP") === 0) {
+        map = true;
+      } else if (line.indexOf("#EXT-X-KEY:") === 0 && /METHOD=(?!NONE)/i.test(line)) {
+        encrypted = true;
+      } else if (line.charAt(0) !== "#" && /\.(ts|m4s|mp4|aac|mp3)([?#]|$)/i.test(line)) {
+        segments = /\.(m4s|mp4)([?#]|$)/i.test(line) ? "fMP4" : "TS";
+      }
+    }
+
+    var info = [];
+    var best = streams.length ? streams[0] : null;
+    if (best) {
+      if (best.RESOLUTION) info.push(best.RESOLUTION);
+      if (best["FRAME-RATE"]) info.push(best["FRAME-RATE"] + " fps");
+      if (best.CODECS) info.push(best.CODECS);
+      if (streams.length > 1) info.push(streams.length + " " + t("diag_variants"));
+    } else {
+      info.push(t("diag_probe_media"));
+    }
+    if (map) info.push("fMP4");
+    else if (segments) info.push(segments);
+    if (encrypted) info.push(t("diag_encrypted"));
+
+    if (best && best.CODECS) {
+      var codec = String(best.CODECS).split(",")[0].trim();
+      var support = diagSupport('video/mp4; codecs="' + codec + '"');
+      diagNote(t("diag_probe_codec") + " " + codec + " — <video>: " +
+        support.native + " · MSE: " + support.mse);
+    }
+    return info.join(" · ");
+  }
+
+  /* Pobranie manifestu idzie tą samą drogą co playlisty (httpGet, a na
+     Androidzie nativeHttpGet), więc działa też tam, gdzie przeglądarka blokuje
+     zapytania między domenami. */
+  function diagProbeStream() {
+    var url = diagManifestUrl(state.currentSource);
+    if (!url) {
+      diagManifest = t("diag_probe_none");
+      return;
+    }
+    if (url === diagManifestFor) return;      /* ten sam strumień — wynik już jest */
+    diagManifestFor = url;
+    diagManifest = t("diag_probing");
+    diagProbing = true;
+    var token = url;
+    setTimeout(function () {
+      if (diagProbing && diagManifestFor === token) {
+        diagProbing = false;
+        diagManifest = t("diag_probe_failed") + " (timeout)";
+        renderDiagnostics();
+      }
+    }, DIAG_PROBE_TIMEOUT);
+    httpGet(url, false).then(function (text) {
+      if (diagManifestFor !== token) return;
+      diagProbing = false;
+      diagManifest = diagManifestInfo(text);
+      renderDiagnostics();
+    }, function (error) {
+      if (diagManifestFor !== token) return;
+      diagProbing = false;
+      diagManifest = t("diag_probe_failed") + " (" +
+        String(error && error.message ? error.message : error).slice(0, 80) + ")";
+      renderDiagnostics();
+    });
+  }
+
+  /* ---- otwarcie panelu bez pytania: dźwięk gra, a obrazu nie ma ---- */
+
+  /* Ile czekamy od startu dźwięku, zanim uznamy, że obraz się już nie pojawi.
+     Krótsze czekanie łapałoby kanał 4K w połowie wczytywania (pierwsze klatki
+     potrafią iść kilka sekund — patrz UHD_WAIT), więc panel wyskakiwałby bez
+     powodu. */
+  var DIAG_AUTO_DELAY = 8000;
+
+  /* Budzik panelu uzbraja się raz na próbę odtwarzania, na starcie dźwięku
+     (zdarzenie „playing” — patrz bindVideoEvents). Dzięki temu panel otwiera
+     się tylko tam, gdzie naprawdę leci dźwięk, a klatek nie ma. */
+  function armDiagAuto() {
+    if (state.diagAutoTimer) return;      /* ten kanał ma już swój budzik */
+    if (state.diagAutoShown || diagVisible()) return;
+    state.diagAutoTimer = setTimeout(function () {
+      state.diagAutoTimer = null;
+      maybeAutoDiagnose(t("diag_auto"));
+    }, DIAG_AUTO_DELAY);
+  }
+
+  /* Panel otwiera się sam tylko w jednym przypadku: dźwięk już leci, a klatek
+     nie ma ani jednej. Raz na kanał (diagAutoShown), bo kolejka prób wraca do
+     tego samego kanału po każdym nieudanym sposobie odtwarzania. */
+  function maybeAutoDiagnose(reason) {
+    if (state.diagAutoShown || diagVisible()) return false;
+    var video = $("video");
+    /* „gra, a nie ma obrazu”: odtwarzacz nie stoi, dane już doszły
+       (readyState ≥ 2), a szerokość klatki jest zerowa */
+    if (!video || video.paused || video.readyState < 2) return false;
+    if (videoHasPicture(video)) return false;
+    state.diagAutoShown = true;
+    diagNote(reason || t("diag_auto"));
+    openDiagnostics();
+    return true;
   }
 
   /* nowy token unieważnia trwające wczytywanie biblioteki po zmianie kanału */
@@ -3942,6 +4502,13 @@
      nie udało się uruchomić. */
   function nextSourceEntry(message, delay, silent, maxCycles, finalHint) {
     if (!state.watchChannel) return;
+
+    /* Zanim stary sposób odtwarzania zostanie zamknięty, panel diagnostyki ma
+       jeszcze co zbierać: element <video> pamięta wtedy stan, w którym dźwięk
+       grał bez ani jednej klatki, a restart te liczby zeruje (patrz
+       maybeAutoDiagnose — panel otwiera się wyłącznie w takiej sytuacji). */
+    maybeAutoDiagnose(t("diag_auto"));
+
     var attempts = parseInt(settings.retryAttempts, 10) || 0;
     var custom = typeof maxCycles === "number";
     var limit = custom ? maxCycles : attempts;
@@ -4034,6 +4601,10 @@
   function playChannel(channel, program, returnScreen) {
     clearTimeout(state.retryTimer);
     clearTimeout(state.stableTimer);
+    /* nowy kanał nie może dostać panelu diagnostyki z poprzedniej próby
+       (patrz armDiagAuto / maybeAutoDiagnose) */
+    clearTimeout(state.diagAutoTimer);
+    state.diagAutoTimer = null;
     /* kanał trafi na listę „Ostatnio oglądane” dopiero po 10 s oglądania */
     startRecentWatch(channel);
 
@@ -4051,6 +4622,8 @@
     /* nowy kanał: rozdzielczość i sprzętowa próba liczą się od zera */
     state.uhdSeen = false;
     state.uhdNativeTried = false;
+    /* nowy kanał = nowa szansa na świeżą diagnozę obrazu (patrz maybeAutoDiagnose) */
+    state.diagAutoShown = false;
     state.sourceIndex = -1;          /* -1 → pierwszy wpis wybierze nextSourceEntry() */
     state.watchChannel = channel;
     state.watchProgram = program || null;
@@ -4168,6 +4741,11 @@
     destroyEngine();
     hideContextMenu();
     hideExitDialog();
+    /* panel diagnostyki leży nad obrazem, więc gaśnie razem z nim, a jego
+       budzik nie może już nic otworzyć (patrz armDiagAuto) */
+    clearTimeout(state.diagAutoTimer);
+    state.diagAutoTimer = null;
+    closeDiagnostics();
     hideOsd();
     video.pause();
     video.removeAttribute("src");
@@ -5573,6 +6151,12 @@
 
     bar.appendChild(osdButton("mute", t("osd_mute"), toggleMute));
 
+    /* Diagnostyka obrazu: pokazuje, na czym stoi odbiornik i co robi element
+       <video> — otwiera się też sama, gdy dźwięk gra, a klatek nie ma
+       (patrz maybeAutoDiagnose). Dlatego jest także na pilocie, nie tylko na
+       ekranie dotykowym. */
+    bar.appendChild(osdButton("diag", t("osd_diag"), toggleDiagnostics));
+
     /* Na telewizorze te dwie akcje są na pilocie (MENU / trzymane OK oraz
        Wstecz), więc przyciski na pasku byłyby tylko duplikatem — dlatego
        pokazują się wyłącznie w trybie dotykowym (CSS: .osd-touch-only).
@@ -5986,6 +6570,13 @@
      i dla sprzętowego Back na Android TV / Fire TV (MainActivity pyta o nią
      przez window.__openiptvBack). Zwraca true, gdy zdarzenie zostało zużyte. */
   function handleBack() {
+    /* Otwarty panel diagnostyki zamyka się pierwszy: leży nad obrazem i ma
+       własne klawisze (patrz diagKeydown). Ta droga jest dla pilota natywnego,
+       który woła handleBack bez zdarzenia klawiatury (window.__openiptvBack). */
+    if (diagVisible()) {
+      closeDiagnostics();
+      return true;
+    }
     if ($("exitDialog")) {
       hideExitDialog();          /* Wstecz na pytaniu o wyjście = zostaję */
       return true;
