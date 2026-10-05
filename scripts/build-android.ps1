@@ -72,7 +72,22 @@ try {
             throw "gradlew.bat not found in $androidDir (run 'npx cap add android' first)."
         }
         Write-Host "Running gradle assembleDebug ..."
-        .\gradlew.bat assembleDebug
+        # Gradle pisze postep i noty javac na stderr, a przy ustawionym na sztywno
+        # $ErrorActionPreference = "Stop" kazda taka nota przewraca skrypt, gdy
+        # wyjscie jest przekierowane (np. do logu). Rozstrzyga kod wyjscia ponizej.
+        $gradlePreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            .\gradlew.bat assembleDebug
+        } finally {
+            $ErrorActionPreference = $gradlePreference
+        }
+        # gradlew is an external process: PowerShell does not stop on its exit code,
+        # so without this check the Copy-Item below took the APK left by the previous
+        # build and published it under the new version number (happened with 2.1.9).
+        if ($LASTEXITCODE -ne 0) {
+            throw "gradle assembleDebug failed (exit code $LASTEXITCODE) - the APK was not built."
+        }
     } finally {
         Pop-Location
     }

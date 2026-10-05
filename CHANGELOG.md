@@ -20,6 +20,14 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.10] — 2026-10-06
+
+### Poprawiono
+- **Obraz w silniku VLC nie zatrzymuje się już na jednej klatce** — silnik nie wyłącza renderowania wprost, więc klatki dochodzą na powierzchnię obrazu tak, jak przewiduje to VLC (przedtem, przy grającym dźwięku, obraz stał na pierwszym ujęciu na każdym kanale).
+- **Zatrzymany obraz oddaje kanał kolejce prób** — gdy klatki przestaną dochodzić, kanał dostaje następny sposób odtwarzania, a panel diagnostyki pokazuje „obraz stanął”, zamiast trzymać jedną klatkę na ekranie.
+- **Panel diagnostyki pokazuje klatki na sekundę** — wiersz VLC podaje klatki na sekundę i klatki z powierzchni obrazu, a wiersz odtwarzacza systemowego: czy jego warstwa obrazu jest widoczna, czy ma powierzchnię i co zakończyło ostatnią próbę.
+- **Brak obrazu wygląda jak zatrzymany odtwarzacz, a nie biały ekran** — tło okna jest czarne, więc przerwa w obrazie nie wygląda już jak zawieszona aplikacja.
+
 ## [2.1.9] — 2026-10-05
 
 ### Dodano

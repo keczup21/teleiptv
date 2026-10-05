@@ -1,11 +1,13 @@
 package pl.openiptv.player;
 
 import android.graphics.Color;
+import android.graphics.SurfaceTexture;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -43,6 +45,11 @@ import java.util.ArrayList;
    której ten telewizor zostawiał czarny ekran (ta sama przypadłość, którą
    odtwarzacz systemowy leczy od 2.1.8). Przełącznik w ustawieniach pozwala obie
    drogi porównać, bo to ma być pomiar, a nie przekonanie.
+
+   Do tego wyboru nie mieszamy renderowania wprost (mediacodec-dr): tego VLC nie
+   rusza i ma je włączone domyślnie, bo droga przez kopiowanie klatek zostawiła
+   temu odbiornikowi obraz zatrzymany na jednej klatce przy grającym dźwięku — na
+   każdym kanale (patrz ensureLib).
 
    Liczby do panelu diagnostyki bierzemy z samego VLC (patrz IMedia.Stats):
    zgubione klatki, odtworzone klatki, uszkodzone dane strumienia i bitrate.
@@ -90,6 +97,24 @@ class VlcEngine {
     private volatile int bitrate = 0;
     private volatile String lastError = "";
     private volatile boolean textureView = true;
+
+    /* Ile klatek naprawdę doszło na obraz — i czy jeszcze dochodzą. Liczymy
+       przyrost trzech liczników naraz (patrz countFrames), bo VLC nie zawsze
+       oddaje wszystkie: displayedPictures i decodedVideo z silnika oraz licznik
+       powierzchni obrazu (texFrames). Gdy żaden nie ruszy, fps zostaje -1 i panel
+       pisze „nie liczone” — brak liczby nie jest dowodem, że obraz stoi. Po
+       pierwszym przyroście brak przyrostu to już zatrzymany obraz: po STALL_TICKS
+       sekundach kanał wraca do kolejki zdarzeniem „stalled”. */
+    private static final int STALL_TICKS = 10;
+    private volatile int fps = -1;
+    private volatile int texFrames = 0;
+    private volatile boolean sawFrames = false;
+    private volatile boolean stalled = false;
+    private int lastDisplayed = 0;
+    private int lastDecoded = 0;
+    private int lastTexFrames = 0;
+    private int flatTicks = 0;
+    private boolean stallReported = false;
 
     VlcEngine(BridgeActivity activity, Listener listener) {
         this.activity = activity;
@@ -155,6 +180,15 @@ class VlcEngine {
             bitrate = 0;
             decoder = "";
             lastError = "";
+            fps = -1;
+            texFrames = 0;
+            sawFrames = false;
+            stalled = false;
+            flatTicks = 0;
+            stallReported = false;
+            lastDisplayed = 0;
+            lastDecoded = 0;
+            lastTexFrames = 0;
 
             player = new MediaPlayer(lib);
             player.setEventListener(new MediaPlayer.EventListener() {
@@ -166,8 +200,16 @@ class VlcEngine {
             /* Ostatni parametr to droga obrazu: true składa klatki przez
                TextureView (kompozytor GPU), false rysuje wprost na płaszczyźnie
                obrazu. Pusty DisplayManager = obraz na głównym ekranie odbiornika. */
-            player.attachViews(layout, null, false, useTexture);
+            /* Warstwa musi być widoczna, zanim powstanie jej powierzchnia —
+               kolejność jak w odtwarzaczu systemowym (patrz startNative):
+               inaczej powierzchnia powstaje dopiero przy następnym wejściu na
+               kanał, a to wygląda dokładnie jak obraz zatrzymany na jednej
+               klatce. */
             layout.setVisibility(View.VISIBLE);
+            player.attachViews(layout, null, false, useTexture);
+            /* Licznik klatek powierzchni zakładamy po attachViews, bo dopiero ono
+               podłącza listener powierzchni silnika (patrz watchSurfaceFrames). */
+            watchSurfaceFrames();
 
             Media media = new Media(lib, Uri.parse(url));
             /* Dekoder sprzętowy włączony i wymagany: 4K HEVC dekodowane
@@ -214,12 +256,12 @@ class VlcEngine {
         options.add("--avcodec-hw=mediacodec");
         options.add("--network-caching=1500");
         options.add("--live-caching=1500");
-        if (useTexture) {
-            /* Klatki przez kopiowanie: dekoder nie pisze wprost na płaszczyznę
-               obrazu, tylko oddaje klatkę kompozytorowi GPU — ta sama droga,
-               którą od 2.1.8 idzie obraz odtwarzacza systemowego. */
-            options.add("--no-mediacodec-dr");
-        }
+        /* Renderowania wprost (mediacodec-dr) świadomie NIE wyłączamy: VLC ma je
+           włączone domyślnie, a droga przez kopiowanie klatek
+           (--no-mediacodec-dr) oddawała jedną klatkę i zatrzymywała obraz przy
+           grającym dźwięku na każdym kanale. Wybór powierzchni — TextureView albo
+           płaszczyzna obrazu — załatwia sam attachViews (patrz start), więc to
+           jedyna dźwignia drogi obrazu, jaką tu mamy. */
         lib = new LibVLC(activity, options);
         if (!agent.isEmpty()) {
             try {
@@ -338,14 +380,116 @@ class VlcEngine {
         try {
             IMedia media = player != null ? player.getMedia() : null;
             IMedia.Stats stats = media != null ? media.getStats() : null;
-            if (stats == null) return;
-            lost = stats.lostPictures;
-            displayed = stats.displayedPictures;
-            decoded = stats.decodedVideo;
-            corrupted = stats.demuxCorrupted;
-            bitrate = Math.round(stats.demuxBitrate);
+            if (stats != null) {
+                lost = stats.lostPictures;
+                displayed = stats.displayedPictures;
+                decoded = stats.decodedVideo;
+                corrupted = stats.demuxCorrupted;
+                bitrate = Math.round(stats.demuxBitrate);
+            }
+            countFrames();
         } catch (Throwable ignored) {
             /* statystyki są dodatkiem — bez nich obraz ma grać dalej */
+        }
+    }
+
+    /* Czy klatki jeszcze dochodzą na obraz. Liczymy przyrost wszystkich trzech
+       liczników naraz (silnikowe displayed i decoded oraz powierzchnię texFrames),
+       bo w różnych drogach obrazu różne z nich żyją. Pierwszy przyrost mówi „ten
+       odbiornik umie to policzyć” (sawFrames), a brak przyrostu po nim przestaje
+       być brakiem danych — to już zatrzymany obraz. Wtedy kanał wraca do kolejki
+       zdarzeniem „stalled”, zamiast trzymać jedną klatkę i udawać, że leci
+       (patrz vlcEvent w app.js). fps to największy z przyrostów, więc mówi raczej
+       rząd wielkości: czy klatki idą i ile ich jest w przybliżeniu. */
+    private void countFrames() {
+        if (player == null || !player.isPlaying()) {
+            /* pauza i buforowanie nie są zatrzymanym obrazem */
+            flatTicks = 0;
+            return;
+        }
+        int tex = texFrames;
+        int stepDisplayed = displayed - lastDisplayed;
+        int stepDecoded = decoded - lastDecoded;
+        int stepTex = tex - lastTexFrames;
+        lastDisplayed = displayed;
+        lastDecoded = decoded;
+        lastTexFrames = tex;
+        int step = Math.max(Math.max(stepDisplayed, stepDecoded), stepTex);
+        if (step > 0) {
+            sawFrames = true;
+            fps = step;
+            flatTicks = 0;
+            stalled = false;
+            stallReported = false;
+            return;
+        }
+        fps = sawFrames ? 0 : -1;
+        /* przed pierwszą klatką nie ma czego pilnować: to nie zatrzymanie obrazu,
+           a wolny start strumienia (pilnuje go armVlcWatchdog po stronie strony) */
+        if (!sawFrames || !firstFrame) return;
+        flatTicks++;
+        if (flatTicks < STALL_TICKS || stallReported) return;
+        stalled = true;
+        stallReported = true;
+        emit("stalled", null, width, height);
+    }
+
+    /* Licznik klatek powierzchni obrazu: TextureView woła onSurfaceTextureUpdated
+       raz na klatkę, która doszła na ekran, więc to jedyny licznik, którego VLC
+       nie może nam zamilczeć. Listener silnika opakowujemy, a nie podmieniamy —
+       bez jego wywołań powierzchnia nie dostanie obrazu (patrz AWindow). */
+    private void watchSurfaceFrames() {
+        try {
+            TextureView view = findTextureView(layout);
+            if (view == null) return;
+            TextureView.SurfaceTextureListener previous = view.getSurfaceTextureListener();
+            if (previous instanceof FrameCounter) return;
+            view.setSurfaceTextureListener(new FrameCounter(previous));
+        } catch (Throwable ignored) {
+            /* licznik jest dodatkiem — bez niego obraz ma grać dalej */
+        }
+    }
+
+    private static TextureView findTextureView(View view) {
+        if (view instanceof TextureView) return (TextureView) view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                TextureView found = findTextureView(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    /* Opakowanie listenera silnika: liczymy klatki i przepuszczamy wszystko dalej. */
+    private final class FrameCounter implements TextureView.SurfaceTextureListener {
+
+        private final TextureView.SurfaceTextureListener next;
+
+        FrameCounter(TextureView.SurfaceTextureListener next) {
+            this.next = next;
+        }
+
+        @Override
+        public void onSurfaceTextureAvailable(SurfaceTexture surface, int surfaceWidth, int surfaceHeight) {
+            if (next != null) next.onSurfaceTextureAvailable(surface, surfaceWidth, surfaceHeight);
+        }
+
+        @Override
+        public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int surfaceWidth, int surfaceHeight) {
+            if (next != null) next.onSurfaceTextureSizeChanged(surface, surfaceWidth, surfaceHeight);
+        }
+
+        @Override
+        public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+            return next == null || next.onSurfaceTextureDestroyed(surface);
+        }
+
+        @Override
+        public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+            texFrames++;
+            if (next != null) next.onSurfaceTextureUpdated(surface);
         }
     }
 
@@ -426,6 +570,12 @@ class VlcEngine {
             info.put("decoded", decoded);
             info.put("corrupted", corrupted);
             info.put("bitrate", bitrate);
+            /* Klatki na sekundę i licznik powierzchni: to one odróżniają obraz
+               żywy od zatrzymanego na jednej klatce (patrz countFrames). */
+            info.put("fps", fps);
+            info.put("texFrames", texFrames);
+            info.put("sawFrames", sawFrames);
+            info.put("stalled", stalled);
             info.put("error", lastError);
             return info.toString();
         } catch (Exception error) {

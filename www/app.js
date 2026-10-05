@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.9";
+  var APP_VERSION = "2.1.10";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -208,6 +208,8 @@
     vlcMuted: false,
     vlcFirstFrame: false,
     vlcPictureWaited: false,
+    /* czy obraz VLC stanął na jednej klatce (patrz countFrames w VlcEngine) */
+    vlcStalled: false,
     /* blokada zdarzeń przewijania listy (rysujemy jedną porcję na raz) */
     listScrollLock: false
   };
@@ -390,7 +392,7 @@
     clock_enabled: "Zegar w rogu obrazu (widoczny tylko podczas oglądania)",
     native_player: "Odtwarzacz systemowy (beta) — kanał na żywo gra odtwarzaczem odbiornika, a nie przez JavaScript",
     vlc_player: "Odtwarzacz VLC (beta) — kanał na żywo gra silnikiem VLC (jego własny demukser TS/HLS); dla kanałów, na których pozostałe drogi zawodzą",
-    vlc_texture: "VLC: obraz przez kopiowanie klatek — lekarstwo na czarny ekran (wyłączone rysuje wprost na płaszczyźnie obrazu odbiornika)",
+    vlc_texture: "VLC: obraz przez powierzchnię obrazu (TextureView) — lekarstwo na czarny ekran (wyłączone rysuje wprost na płaszczyźnie obrazu odbiornika)",
     platform_line: "Wykryto: {name} • interfejs: {mode}",
     platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
     platform_android: "Android", platform_ios: "iOS", platform_browser: "komputer / przeglądarka",
@@ -513,8 +515,14 @@
     diag_vlc_displayed: "odtworzone klatki",
     diag_vlc_corrupted: "uszkodzone dane strumienia",
     diag_vlc_bitrate: "strumień",
-    diag_vlc_copy: "obraz przez kopiowanie klatek",
-    diag_vlc_direct: "obraz wprost na płaszczyźnie obrazu",
+    diag_vlc_texture: "obraz przez powierzchnię obrazu (TextureView)",
+    diag_vlc_plane: "obraz wprost na płaszczyźnie obrazu",
+    diag_vlc_surface: "klatki z powierzchni obrazu",
+    diag_vlc_fps: "klatki na sekundę",
+    diag_vlc_nofps: "nie liczone",
+    diag_stall: "obraz stanął — klatki przestały dochodzić",
+    diag_exo_surface: "powierzchnia obrazu",
+    diag_layer_on: "widoczna", diag_layer_off: "ukryta",
     epg_none: "Brak danych EPG dla tego kanału.",
     archive_day_today: "Dziś", archive_day_yesterday: "Wczoraj", archive_day_before: "Przedwczoraj",
     archive_limited: "pokazano {shown} z {total}",
@@ -688,7 +696,7 @@
     clock_enabled: "Clock in the corner (visible only while watching)",
     native_player: "System player (beta) — a live channel plays on the device player, not through JavaScript",
     vlc_player: "VLC player (beta) — a live channel plays on the VLC engine (its own TS/HLS demuxer); for channels the other paths give up on",
-    vlc_texture: "VLC: picture through frame copy — the cure for a black screen (off draws straight onto the device picture plane)",
+    vlc_texture: "VLC: picture through the picture surface (TextureView) — the cure for a black screen (off draws straight onto the device picture plane)",
     platform_line: "Detected: {name} • interface: {mode}",
     platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
     platform_android: "Android", platform_ios: "iOS", platform_browser: "desktop / browser",
@@ -806,8 +814,14 @@
     diag_vlc_displayed: "displayed frames",
     diag_vlc_corrupted: "corrupted stream data",
     diag_vlc_bitrate: "stream",
-    diag_vlc_copy: "picture through frame copy",
-    diag_vlc_direct: "picture straight onto the picture plane",
+    diag_vlc_texture: "picture through the picture surface (TextureView)",
+    diag_vlc_plane: "picture straight onto the picture plane",
+    diag_vlc_surface: "frames from the picture surface",
+    diag_vlc_fps: "frames per second",
+    diag_vlc_nofps: "not counted",
+    diag_stall: "picture stopped — frames stopped arriving",
+    diag_exo_surface: "picture surface",
+    diag_layer_on: "visible", diag_layer_off: "hidden",
     diag_encrypted: "encrypted (EXT-X-KEY)", diag_variants: "variants",
     epg_none: "No EPG data for this channel.",
     archive_day_today: "Today", archive_day_yesterday: "Yesterday", archive_day_before: "2 days ago",
@@ -3946,7 +3960,15 @@
         (native.decoder ? " · " + String(native.decoder) : "") +
         " · " + t("diag_exo_frames") + ": " +
         (native.firstFrame ? t("diag_yes") : t("diag_no")) +
-        " · " + t("diag_exo_dropped") + ": " + (native.dropped | 0));
+        " · " + t("diag_exo_dropped") + ": " + (native.dropped | 0) +
+        /* Warstwa ukryta przy przezroczystej stronie znaczy dokładnie to, co widać
+           jako czarny (przed 2.1.10 biały) ekran; „powierzchnia obrazu” mówi, czy
+           warstwa zdążyła ją mieć, a błąd — co tę próbę zakończyło (nativeInfo). */
+        " · " + t("diag_layer") + ": " +
+        (native.layerVisible ? t("diag_layer_on") : t("diag_layer_off")) +
+        " · " + t("diag_exo_surface") + ": " +
+        (native.surfaceReady ? t("diag_yes") : t("diag_no")) +
+        (native.error ? " · " + t("diag_error") + ": " + String(native.error).slice(0, 80) : ""));
     }
     /* Silnik VLC: te same pytania, co droga systemowa, plus to, czego tam nie ma —
        ile klatek odtworzono, ile danych strumienia było uszkodzonych i jaki jest
@@ -3955,14 +3977,19 @@
     if (vlc) {
       lines.push(" " + t("diag_vlc_native") + " " + String(vlc.libvlc) +
         " · API " + (vlc.api | 0) +
-        " · " + (vlc.texture ? t("diag_vlc_copy") : t("diag_vlc_direct")) +
+        " · " + (vlc.texture ? t("diag_vlc_texture") : t("diag_vlc_plane")) +
         (vlc.decoder ? " · " + String(vlc.decoder) : "") +
         " · " + t("diag_vlc_frames") + ": " +
         (vlc.firstFrame ? t("diag_yes") : t("diag_no")) +
         " · " + t("diag_vlc_lost") + ": " + (vlc.lost | 0) +
         " · " + t("diag_vlc_displayed") + ": " + (vlc.displayed | 0) +
         " · " + t("diag_vlc_corrupted") + ": " + (vlc.corrupted | 0) +
-        " · " + t("diag_vlc_bitrate") + ": " + vlcBitrate(vlc.bitrate));
+        " · " + t("diag_vlc_bitrate") + ": " + vlcBitrate(vlc.bitrate) +
+        /* Klatki na sekundę i licznik powierzchni obrazu: dopiero one odróżniają
+           obraz żywy od zatrzymanego na jednej klatce (patrz countFrames). */
+        " · " + t("diag_vlc_fps") + ": " + vlcFps(vlc) +
+        " · " + t("diag_vlc_surface") + ": " +
+        (vlc.sawFrames ? String(vlc.texFrames | 0) : t("diag_none")));
     }
     return lines;
   }
@@ -4003,6 +4030,8 @@
       lines.push(" " + t("diag_vlc") + ": " + (state.vlcPlaying ? t("diag_playing") : t("diag_paused")) +
         " · " + t("diag_size") + ": " + (state.vlcWidth | 0) + "×" + (state.vlcHeight | 0) +
         " · " + t("diag_muted") + ": " + (state.vlcMuted ? t("diag_yes") : t("diag_no")) +
+        /* obraz stanął w tej próbie — kanał idzie dalej kolejką (patrz vlcEvent) */
+        (state.vlcStalled ? " · " + t("diag_stall") : "") +
         " · " + t("diag_buffer") + ": " + t("diag_vlc_buffer"));
       lines.push(" " + maskUrl(state.currentSource || ""));
       return lines;
@@ -5463,6 +5492,14 @@
     return (Math.round(value / 100) / 10) + " Mb/s";
   }
 
+  /* Klatki na sekundę z silnika VLC. VLC nie zawsze oddaje swoje liczniki, więc
+     brak liczby mówimy wprost („nie liczone”) — brak liczby nie jest dowodem, że
+     obraz stoi (patrz countFrames w VlcEngine). */
+  function vlcFps(vlc) {
+    if (!vlc || !vlc.sawFrames || !(vlc.fps >= 0)) return t("diag_vlc_nofps");
+    return (vlc.fps | 0) + "/s" + (vlc.stalled ? " (" + t("diag_stall") + ")" : "");
+  }
+
   /* Czy obraz w tej próbie rysuje VLC (a nie element <video>). */
   function vlcActive() {
     return state.engine === "vlc";
@@ -5494,6 +5531,7 @@
     state.vlcHeight = 0;
     state.vlcFirstFrame = false;
     state.vlcPictureWaited = false;
+    state.vlcStalled = false;
     state.engineInstance = {
       kind: "vlc",
       close: function () { stopVlc(); }
@@ -5544,6 +5582,15 @@
       /* klatka doszła na obraz — dokładnie to, czego brakuje przy samym dźwięku */
       if (state.vlcWidth > 0) state.vlcFirstFrame = true;
       noteStreamActivity();
+      return;
+    }
+    if (type === "stalled") {
+      /* obraz stanął: klatki przestały dochodzić, a silnik dalej twierdzi, że gra.
+         Kanał wraca do kolejki, zamiast trzymać jedną klatkę na ekranie przez
+         resztę meczu (patrz countFrames w VlcEngine). */
+      state.vlcStalled = true;
+      diagNote(t("diag_stall"));
+      handlePlaybackError(t("err_stream") + " (" + engineName("vlc") + ": " + t("diag_stall") + ")");
       return;
     }
     if (type === "playing") {
@@ -6253,6 +6300,7 @@
     state.vlcHeight = 0;
     state.vlcFirstFrame = false;
     state.vlcPictureWaited = false;
+    state.vlcStalled = false;
     markExoMode(false);
     /* nazwa kanału mówi wprost, że to 4K — rozpoznajemy to przed startem
        odtwarzania, żeby wymuszona warstwa obrazu nie zdążyła wejść kanałowi

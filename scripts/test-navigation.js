@@ -2814,10 +2814,18 @@ check("VLC: silnik jest w paczce Androida (biblioteki tylko dla ABI telewizorow)
   gradleVars.indexOf("libvlcAbiFilters = ['arm64-v8a', 'armeabi-v7a']") > 0 &&
   gradle.indexOf("for (abi in rootProject.ext.libvlcAbiFilters)") > 0 &&
   gradle.indexOf("useLegacyPackaging true") > 0);
-check("VLC: obraz idzie kompozytorem GPU (TextureView), a nie sprzetowa plaszczyzna",
+check("VLC: droge obrazu wybiera powierzchnia (TextureView), a nie kopiowanie klatek",
   javaVlc.indexOf("import org.videolan.libvlc.util.VLCVideoLayout;") > 0 &&
   javaVlc.indexOf("player.attachViews(layout, null, false, useTexture);") > 0 &&
-  javaVlc.indexOf("options.add(\"--no-mediacodec-dr\");") > 0 &&
+  /* Renderowania wprost nie wolno wylaczac: to ta droga zatrzymywala obraz na
+     jednej klatce przy grajacym dzwieku na kazdym kanale (blad zgloszony z 2.1.9).
+     Nazwa opcji moze wystapic w komentarzu, wiec pytamy o samo wywolanie. */
+  javaVlc.indexOf("options.add(\"--no-mediacodec-dr\");") < 0 &&
+  /* Warstwa widoczna, zanim powstanie jej powierzchnia: inaczej powierzchnia
+     powstaje dopiero przy nastepnym wejsciu na kanal (patrz startNative). */
+  javaVlc.indexOf("layout.setVisibility(View.VISIBLE);") > 0 &&
+  javaVlc.indexOf("layout.setVisibility(View.VISIBLE);") <
+    javaVlc.indexOf("player.attachViews(layout, null, false, useTexture);") &&
   javaVlc.indexOf("root.addView(layout, 0);") > 0 &&
   javaVlc.indexOf("webView.setBackgroundColor(Color.TRANSPARENT);") > 0);
 check("VLC: sprzetowy dekoder wymagany (programowe 4K to slepa ulica)",
@@ -2830,6 +2838,23 @@ check("VLC: panel diagnostyki ma liczby, ktorych nie ma droga systemowa",
   javaVlc.indexOf("stats.demuxBitrate") > 0 &&
   javaVlc.indexOf("case MediaPlayer.Event.Vout:") > 0 &&
   javaVlc.indexOf("IMedia.Stats stats = media != null ? media.getStats() : null;") > 0);
+/* Klatki na sekunde i zatrzymany obraz: dopiero te liczby odrozniaja obraz zywy od
+   zatrzymanego na jednej klatce, a silnik ma oddac kanal kolejce, gdy klatki
+   przestana dochodzic (patrz countFrames w VlcEngine i vlcEvent w app.js). */
+check("VLC: klatki na sekunde, licznik powierzchni obrazu i zatrzymany obraz",
+  javaVlc.indexOf("private static final int STALL_TICKS = 10;") > 0 &&
+  javaVlc.indexOf("private void countFrames() {") > 0 &&
+  javaVlc.indexOf("private void watchSurfaceFrames() {") > 0 &&
+  javaVlc.indexOf("public void onSurfaceTextureUpdated(SurfaceTexture surface) {") > 0 &&
+  javaVlc.indexOf("info.put(\"fps\", fps);") > 0 &&
+  javaVlc.indexOf("info.put(\"texFrames\", texFrames);") > 0 &&
+  javaVlc.indexOf("info.put(\"stalled\", stalled);") > 0 &&
+  javaVlc.indexOf("emit(\"stalled\", null, width, height);") > 0 &&
+  src.indexOf("function vlcFps(vlc) {") > 0 &&
+  src.indexOf("diag_vlc_fps: \"klatki na sekundę\"") > 0 &&
+  src.indexOf("diag_vlc_fps: \"frames per second\"") > 0 &&
+  src.indexOf("diag_stall: \"obraz stanął — klatki przestały dochodzić\"") > 0 &&
+  src.indexOf("diag_stall: \"picture stopped — frames stopped arriving\"") > 0);
 check("VLC: most ma te same zadania, co droga systemowa",
   java.indexOf("public String playVlc(final String url, final String userAgent, final boolean textureView)") > 0 &&
   java.indexOf("public void stopVlc()") > 0 &&
@@ -2847,9 +2872,9 @@ check("VLC: domyslnie wylaczony — wlacza go przelacznik w ustawieniach",
   src.indexOf('$("vlcPlayer").checked = settings.vlcPlayer === true;') > 0 &&
   src.indexOf('settings.vlcPlayer = $("vlcPlayer").checked;') > 0 &&
   src.indexOf("vlc_player: \"VLC player (beta)") > 0 &&
-  src.indexOf("vlc_texture: \"VLC: picture through frame copy") > 0 &&
+  src.indexOf("vlc_texture: \"VLC: picture through the picture surface (TextureView)") > 0 &&
   src.indexOf("vlc_player: \"Odtwarzacz VLC (beta)") > 0 &&
-  src.indexOf("vlc_texture: \"VLC: obraz przez kopiowanie klatek") > 0);
+  src.indexOf("vlc_texture: \"VLC: obraz przez powierzchnię obrazu (TextureView)") > 0);
 check("VLC: bez mostu (webOS, przegladarka) droga jest pomijana",
   src.indexOf("function vlcBridge() {") > 0 &&
   src.indexOf("if (!bridge || typeof bridge.playVlc !== \"function\") return null;") > 0 &&
@@ -3200,6 +3225,19 @@ vh.api.vlcEvent({ type: "error", message: "brak kodeka" });
 check("VLC: blad mostu oddaje kanal kolejce (z powodem)",
   vh.calls.errors.length === 1 && vh.calls.errors[0].indexOf("brak kodeka") > 0,
   JSON.stringify(vh.calls.errors));
+
+/* Obraz stanal: klatki przestaly dochodzic, a silnik dalej twierdzi, ze gra.
+   Kanal wraca do kolejki, zamiast trzymac jedna klatke do konca meczu (patrz
+   countFrames w VlcEngine i vlcEvent w app.js). */
+vh = vlcHarness({});
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+vh.api.vlcEvent({ type: "playing" });
+vh.api.vlcEvent({ type: "stalled" });
+check("VLC: zatrzymany obraz oddaje kanal kolejce (z powodem)",
+  vh.calls.errors.length === 1 && vh.calls.errors[0].indexOf("<diag_stall>") > 0,
+  JSON.stringify(vh.calls.errors));
+check("VLC: panel wie, ze obraz stanal",
+  vh.api.state.vlcStalled === true && vh.calls.notes.join(",").indexOf("diag_stall") >= 0);
 
 /* Budzik: dzwiek gra, a klatek nie ma — kanal nie moze zostac na czarnym ekranie. */
 vh = vlcHarness({});

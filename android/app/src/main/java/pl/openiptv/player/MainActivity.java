@@ -61,6 +61,10 @@ public class MainActivity extends BridgeActivity {
     private volatile int nativeDroppedSeen = 0;
     private volatile int nativeDroppedBase = 0;
     private volatile boolean nativeFirstFrame = false;
+    /* Ostatni komunikat błędu drogi systemowej: biały ekran znaczy „strona
+       przezroczysta, a pod nią żadnej warstwy”, więc panel diagnostyki musi
+       powiedzieć, co tę próbę zakończyło (patrz nativeInfo). */
+    private volatile String nativeLastError = "";
     private DefaultHttpDataSource.Factory httpFactory;
     private boolean nativeMuted = false;
     /* Stan dla app.js czytany przez most nativeState() — most chodzi na własnym
@@ -80,6 +84,12 @@ public class MainActivity extends BridgeActivity {
         clearWebViewCacheOnUpdate();
         super.onCreate(savedInstanceState);
         applyTvViewport();
+        /* Tło okna na czarno. Strona w trybie obrazu jest przezroczysta, więc gdy
+           żadna warstwa obrazu nie jest widoczna (droga padła, kanał się dopiero
+           łączy), przez dziurę widać było białe tło motywu — na odbiorniku
+           wyglądało to jak „biały ekran”, choć znaczyło „brak warstwy obrazu”
+           (patrz diagCodecLines w app.js: wiersz o warstwie obrazu). */
+        getWindow().getDecorView().setBackgroundColor(Color.BLACK);
         bindExitBridge();
         initNativePlayer();
         initVlcEngine();
@@ -210,6 +220,13 @@ public class MainActivity extends BridgeActivity {
                         info.put("firstFrame", nativeFirstFrame);
                         int dropped = nativeDroppedSeen - nativeDroppedBase;
                         info.put("dropped", dropped > 0 ? dropped : 0);
+                        /* Czy warstwa obrazu systemowego jest w tej chwili widoczna
+                           i czy jej powierzchnia jest gotowa: bez tego brak obrazu
+                           wygląda jak wina dekodera, choć znaczy „brak warstwy”
+                           (patrz diagCodecLines w app.js). */
+                        info.put("layerVisible", isNativeLayerVisible());
+                        info.put("surfaceReady", videoView != null && videoView.isAvailable());
+                        info.put("error", nativeLastError);
                         return info.toString();
                     } catch (Exception error) {
                         return "";
@@ -553,6 +570,7 @@ public class MainActivity extends BridgeActivity {
                pokazywać ten kanał, a nie całą sesję odtwarzacza. */
             nativeDecoder = "";
             nativeFirstFrame = false;
+            nativeLastError = "";
             nativeDroppedBase = nativeDroppedSeen;
             /* Warstwa musi być widoczna, zanim powstanie jej powierzchnia — inaczej
                odtwarzacz dostaje obraz dopiero przy kolejnym wejściu na kanał. */
@@ -585,6 +603,18 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /* Czy warstwa obrazu systemowego jest w tej chwili widoczna. Strona na czas
+       obrazu jest przezroczysta, więc warstwa ukryta znaczy „pod spodem nie ma
+       czego oglądać” — a to jest właśnie ten biały (od 2.1.10 czarny) ekran,
+       który trzeba umieć odróżnić od winy dekodera (patrz nativeInfo). */
+    private boolean isNativeLayerVisible() {
+        try {
+            return videoView != null && videoView.getVisibility() == View.VISIBLE;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
     /* Zdarzenie dla strony: app.js czyta z niego stan obrazu (patrz
        __openiptvNativeEvent). Budowane przez JSONObject, bo komunikatu błędu nie
        wolno przepuścić przez cudzysłów. */
@@ -601,6 +631,9 @@ public class MainActivity extends BridgeActivity {
             json = "{\"type\":\"error\"}";
         }
         nativeState = json;
+        /* Ostatni błąd drogi systemowej trzymamy dla panelu diagnostyki: bez niego
+           brak obrazu nie mówi, co się właściwie stało (patrz nativeInfo). */
+        if ("error".equals(type) && message != null) nativeLastError = message;
         final WebView webView = getBridge() != null ? getBridge().getWebView() : null;
         if (webView == null) return;
         final String payload = json;
