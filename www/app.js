@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.5";
+  var APP_VERSION = "2.1.6";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -191,6 +191,15 @@
     guardDroppedSum: 0,
     guardRecycles: 0,
     guardGaveUp: false,
+    /* Droga natywna (Android: odtwarzacz systemowy za WebView — patrz
+       startExoSource). Element <video> nie bierze w niej udziału, więc stan obrazu
+       (czy leci, jaką ma klatkę, czy jest wyciszony) trzymamy tutaj; most donosi
+       o nim zdarzeniami (patrz exoEvent). */
+    exoPlaying: false,
+    exoWidth: 0,
+    exoHeight: 0,
+    exoMuted: false,
+    exoPictureWaited: false,
     /* blokada zdarzeń przewijania listy (rysujemy jedną porcję na raz) */
     listScrollLock: false
   };
@@ -456,6 +465,15 @@
     diag_recycle_stop: "zrywy wracają także na świeżym strumieniu: to granica tego odtwarzacza (MSE w WebView), nie łącze",
     osd_recycle: "Przestrajanie obrazu…",
     diag_feeder_drop: "kolejka odcinków skrócona o {n} (obraz nadgania na żywo)",
+    /* ---------------- 2.1.6: odtwarzacz systemowy (Android, ExoPlayer) ----------------
+       Kanał na żywo oddajemy odtwarzaczowi odbiornika: on rozbiera TS i HLS sprzętowo,
+       więc 4K nie idzie przez JavaScript i MSE (patrz startExoSource). Te napisy są
+       dla niego — na innych drogach zostają nieużywane. */
+    engine_exo: "odtwarzacz systemowy",
+    diag_exo: "obraz systemowy",
+    diag_exo_buffer: "prowadzi go odtwarzacz systemowy",
+    diag_exo_start: "oddaję kanał odtwarzaczowi systemowemu",
+    diag_native_player: "odtwarzacz systemowy (ExoPlayer)",
     epg_none: "Brak danych EPG dla tego kanału.",
     archive_day_today: "Dziś", archive_day_yesterday: "Wczoraj", archive_day_before: "Przedwczoraj",
     archive_limited: "pokazano {shown} z {total}",
@@ -724,6 +742,14 @@
     diag_recycle_stop: "hiccups come back on a fresh stream too: this is the limit of this player (MSE in the WebView), not the link",
     osd_recycle: "Restarting the picture…",
     diag_feeder_drop: "segment queue trimmed by {n} (catching up with live)",
+    /* ---------------- 2.1.6: the system player (Android, ExoPlayer) ----------------
+       A live channel goes to the device's own player: it demuxes TS and HLS in
+       hardware, so 4K does not travel through JavaScript and MSE (see startExoSource). */
+    engine_exo: "system player",
+    diag_exo: "system picture",
+    diag_exo_buffer: "the system player keeps it",
+    diag_exo_start: "handing the channel to the system player",
+    diag_native_player: "system player (ExoPlayer)",
     diag_encrypted: "encrypted (EXT-X-KEY)", diag_variants: "variants",
     epg_none: "No EPG data for this channel.",
     archive_day_today: "Today", archive_day_yesterday: "Yesterday", archive_day_before: "2 days ago",
@@ -3649,12 +3675,14 @@
      czytało się jak informacja o strumieniu — przy catch-upie wyglądało to,
      jakby aplikacja wczytywała kanał na żywo zamiast nagrania. */
   function engineName(engine) {
+    if (engine === "exo") return t("engine_exo");
     if (engine === "mse") return t("engine_mse");
     if (engine === "hls") return t("engine_hls");
     return t("engine_native");
   }
 
   function engineLabel(engine) {
+    if (engine === "exo") return t("engine_exo");
     if (engine === "mse") return t("engine_mse");
     if (engine === "hls") return t("engine_hls");
     return t("live");
@@ -3841,6 +3869,15 @@
           " · " + String(features.networkLoaderName || "?"));
       }
     } catch (error) { /* starsza biblioteka bez tego testu */ }
+    /* Odtwarzacz systemowy (Android): to nim idzie obraz 4K, więc panel musi
+       pokazać, czy w ogóle jest i czy odbiornik ma sprzętowy dekoder HEVC —
+       bez niego żadna droga nie da obrazu (patrz startExoSource). */
+    var native = exoInfo();
+    if (native) {
+      lines.push(" " + t("diag_native_player") + ": media3 " + String(native.media3) +
+        " · API " + (native.api | 0) +
+        " · HEVC: " + (native.hevc ? t("diag_yes") : t("diag_no")));
+    }
     return lines;
   }
 
@@ -3864,6 +3901,16 @@
       (videoIsUhd() ? t("diag_yes") : (state.uhdSeen ? t("diag_uhd_named") : t("diag_no"))));
 
     var video = $("video");
+    /* Obraz systemowy nie jest w elemencie <video>, więc panel pokazuje jego stan
+       z mostu — inaczej wiersze niżej mówiłyby „pauza, 0×0”, choć obraz leci. */
+    if (exoActive()) {
+      lines.push(" " + t("diag_exo") + ": " + (state.exoPlaying ? t("diag_playing") : t("diag_paused")) +
+        " · " + t("diag_size") + ": " + (state.exoWidth | 0) + "×" + (state.exoHeight | 0) +
+        " · " + t("diag_muted") + ": " + (state.exoMuted ? t("diag_yes") : t("diag_no")) +
+        " · " + t("diag_buffer") + ": " + t("diag_exo_buffer"));
+      lines.push(" " + maskUrl(state.currentSource || ""));
+      return lines;
+    }
     if (!video) {
       lines.push(" <video>: " + t("diag_none"));
       return lines;
@@ -5040,10 +5087,211 @@
     });
   }
 
-  /* Kolejka prób dla kanału. Zawsze najpierw próbujemy sprzętowo (natywnie),
-     dopiero potem sięgamy po MSE i HLS. */
+  /* ==============  ODTWARZACZ SYSTEMOWY (Android: ExoPlayer)  ==============
+
+     Kanał 4K HEVC z playlisty szedł dotąd przez MSE: mpegts.js rozbierał TS
+     w JavaScripcie, a WebView dekodował gotowe fragmenty. To dwie kopie tych samych
+     danych i cała praca na procesorze odbiornika, więc obraz się zrywał, a po
+     dłuższym oglądaniu system zamykał aplikację. Każda inna aplikacja IPTV na
+     Androidzie robi to inaczej: oddaje adres kanału odtwarzaczowi odbiornika
+     (ExoPlayer), który rozbiera TS i HLS w kodzie natywnym i rysuje klatki wprost na
+     warstwie sprzętowej (patrz MainActivity -> ODTWARZACZ NATYWNY).
+
+     Ta droga jest pierwsza w kolejce kanału na żywo, ale tylko tam, gdzie most
+     istnieje — czyli w aplikacji na Androidzie. Obraz rysuje się POD stroną, więc
+     na czas odtwarzania strona jest przezroczysta (klasa „exo-player”, patrz
+     styles.css). Gdy mostu nie ma, kanał nie ruszy albo nie da obrazu, kolejka idzie
+     dalej jak dotąd (natywnie → MSE → HLS) — nic nie jest zamknięte na jedną drogę. */
+
+  var EXO_START_WAIT = 9000;         /* ile czekamy, aż obraz systemowy ruszy */
+  var EXO_PICTURE_WAIT = 6000;       /* dźwięk gra, a klatek nie ma */
+
+  /* Most do odtwarzacza systemowego: jest tylko w aplikacji na Androidzie. W
+     przeglądarce i na webOS zwracamy null i kanał idzie dotychczasowymi drogami. */
+  function exoBridge() {
+    try {
+      if (!platformInfo.native) return null;
+      var bridge = window.OpenIptvNative;
+      if (!bridge || typeof bridge.playNative !== "function") return null;
+      return bridge;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /* Co potrafi odtwarzacz systemowy — panel diagnostyki pokazuje to obok testu MSE
+     (patrz diagCodecLines). Bez mostu nie ma czego pokazywać. */
+  function exoInfo() {
+    var bridge = exoBridge();
+    if (!bridge || typeof bridge.nativeInfo !== "function") return null;
+    try {
+      var info = JSON.parse(String(bridge.nativeInfo() || ""));
+      return info && info.media3 ? info : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /* Czy obraz w tej próbie rysuje odtwarzacz systemowy (a nie element <video>). */
+  function exoActive() {
+    return state.engine === "exo";
+  }
+
+  /* Na czas obrazu systemowego strona musi być przezroczysta — inaczej zasłoni
+     klatki rysowane pod nią. */
+  function markExoMode(on) {
+    var want = on !== false;
+    var root = document.documentElement;
+    if (root && root.classList) root.classList.toggle("exo-player", want);
+    if (document.body && document.body.classList) document.body.classList.toggle("exo-player", want);
+  }
+
+  /* Element <video> nie bierze udziału w obrazie systemowym: gasimy go, żeby żaden
+     dekoder nie został w tle i żeby drogi MSE/HLS zaczynały od zera. */
+  function clearVideoQuietly() {
+    var video = $("video");
+    if (!video) return;
+    try {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    } catch (error) { /* element bez źródła nie może zatrzymać kanału */ }
+  }
+
+  /* Pauza, wznowienie i wyciszenie obrazu systemowego — most przyjmuje sam stan. */
+  function exoPlay(playing) {
+    var bridge = exoBridge();
+    if (!bridge || typeof bridge.setNativePlaying !== "function") return;
+    try { bridge.setNativePlaying(playing !== false); } catch (error) { /* most milczy */ }
+  }
+
+  function exoVolume(muted) {
+    var bridge = exoBridge();
+    if (!bridge || typeof bridge.setNativeMuted !== "function") return;
+    try { bridge.setNativeMuted(muted === true); } catch (error) { /* most milczy */ }
+  }
+
+  function startExoSource(entry) {
+    var bridge = exoBridge();
+    var token = nextEngineToken();
+    state.engine = "exo";
+    state.engineLoading = true;
+    state.exoPlaying = false;
+    state.exoWidth = 0;
+    state.exoHeight = 0;
+    state.exoPictureWaited = false;
+    state.engineInstance = {
+      kind: "exo",
+      close: function () { stopExo(); }
+    };
+    if (!bridge) {
+      /* Most zniknął w trakcie (albo go tu nie ma) — kolejka idzie dalej. */
+      handlePlaybackError(t("err_stream") + " (" + engineName("exo") + ")");
+      return;
+    }
+    clearVideoQuietly();
+    markExoMode(true);
+    var result = "";
+    try {
+      /* Identyfikator przeglądarki wysyłamy ten sam, którym posługuje się strona:
+         dostawcy potrafią po nim filtrować dostęp do kanału. */
+      result = String(bridge.playNative(entry.url, navigator.userAgent || ""));
+    } catch (error) {
+      result = "error: " + error.message;
+    }
+    if (result !== "ok") {
+      handlePlaybackError(t("err_stream") + " (" + engineName("exo") + ": " + result + ")");
+      return;
+    }
+    /* Wyciszenie jest stanem tej sesji — nowy obraz musi je dostać od razu. */
+    if (state.exoMuted) exoVolume(true);
+    diagNote(t("diag_exo_start"));
+    armExoWatchdog(token, EXO_START_WAIT);
+  }
+
+  /* Zamknięcie obrazu systemowego: most gasi odtwarzacz, a strona wraca do
+     zwykłego wyglądu (patrz destroyEngine → engineInstance.close). */
+  function stopExo() {
+    var bridge = exoBridge();
+    if (bridge && typeof bridge.stopNative === "function") {
+      try { bridge.stopNative(); } catch (error) { /* most już nie odpowiada */ }
+    }
+    markExoMode(false);
+    state.exoPlaying = false;
+  }
+
+  /* Zdarzenia z odtwarzacza systemowego (MainActivity -> emitNative). Trzymają ten
+     sam stan, co zdarzenia <video> na innych drogach: bez tego pasek, budziki
+     i panel diagnostyki nie wiedziałyby, że obraz naprawdę leci. */
+  function exoEvent(event) {
+    if (!exoActive() || !state.watchChannel) return;
+    var type = event && event.type;
+    if (type === "size") {
+      state.exoWidth = event.width | 0;
+      state.exoHeight = event.height | 0;
+      noteStreamActivity();
+      return;
+    }
+    if (type === "playing") {
+      state.engineLoading = false;
+      state.exoPlaying = true;
+      clearStartWatchdog();
+      noteStreamActivity();
+      var error = $("playerError");
+      if (error) error.classList.add("hidden");
+      /* od tego momentu liczy się czas oglądania dla „Ostatnio oglądane” */
+      state.watchStart = state.watchStart || Date.now();
+      scheduleRecentRecord();
+      updateOsd();
+      scheduleOsdHide();
+      return;
+    }
+    if (type === "paused") {
+      state.exoPlaying = false;
+      updateOsd();
+      return;
+    }
+    if (type === "buffering" || type === "ended") return;
+    if (type === "error") {
+      handlePlaybackError(t("err_stream") + " (" + engineName("exo") +
+        (event.message ? ": " + String(event.message).slice(0, 120) : "") + ")");
+    }
+  }
+  window.__openiptvNativeEvent = exoEvent;
+
+  /* Budzik drogi natywnej: brak obrazu musi oddać kanał kolejce, a nie zostawić
+     czarny ekran. Dwa pytania i oba rozstrzyga most:
+       • czy cokolwiek ruszyło (po EXO_START_WAIT),
+       • czy razem z dźwiękiem są klatki (po EXO_PICTURE_WAIT) — dekoder potrafi
+         oddać sam dźwięk, tak jak na drodze MSE. */
+  function armExoWatchdog(token, delay) {
+    clearStartWatchdog();
+    state.startTimer = setTimeout(function () {
+      state.startTimer = null;
+      if (!state.watchChannel || state.engineToken !== token || !exoActive()) return;
+      if (!state.exoPlaying) {
+        handlePlaybackError(t("err_stream") + " (" + engineName("exo") + ")");
+        return;
+      }
+      if (state.exoWidth > 0) return;
+      if (!state.exoPictureWaited) {
+        state.exoPictureWaited = true;
+        armExoWatchdog(token, EXO_PICTURE_WAIT);
+        return;
+      }
+      handlePlaybackError(t("err_stream") + " (" + engineName("exo") + ": " + t("err_no_picture") + ")");
+    }, delay || EXO_START_WAIT);
+  }
+
+  /* Kolejka prób dla kanału. Na Androidzie pierwszy jest odtwarzacz systemowy
+     (patrz startExoSource), potem odtwarzacz sprzętowy strony, a na końcu MSE i HLS. */
   function buildSourceQueue(primaryUrl) {
-    var queue = [{ engine: "native", url: primaryUrl }];
+    var queue = [];
+    /* Odtwarzacz systemowy bierzemy tylko dla kanału NA ŻYWO: archiwum ma skończone
+       okno i wymaga przewijania, a to drogi <video>/MSE (nie ma tam czego
+       upraszczać). Gdy mostu nie ma (webOS, przeglądarka), wpisu nie ma wcale. */
+    if (exoBridge() && !state.watchProgram) queue.push({ engine: "exo", url: primaryUrl });
+    queue.push({ engine: "native", url: primaryUrl });
     var bare = String(primaryUrl || "").split("#")[0].split("?")[0].toLowerCase();
     var extension = bare.indexOf(".") >= 0 ? bare.substring(bare.lastIndexOf(".") + 1) : "";
     var tsLike =
@@ -5087,6 +5335,10 @@
      gdzie go postawiono, czyli na końcu kolejki — patrz niżej. */
   function preferEngine(queue, hint) {
     if (hint !== "mse" && hint !== "hls") return queue;
+    /* Odtwarzacz systemowy zostaje na czele kolejki: to droga sprzętowa, więc
+       zapamiętany silnik nie ma po co jej omijać — a gdy nie da obrazu, kolejka idzie
+       dalej jak dotąd (patrz buildSourceQueue). */
+    if (queue[0] && queue[0].engine === "exo") return queue;
     for (var i = 1; i < queue.length; i++) {
       /* Czytnik playlisty (wpis z „hls: true”) zostaje na końcu kolejki. Z
          nazwy wygląda jak zwykłe MSE, więc zapamiętany MSE wybierał właśnie
@@ -5129,16 +5381,21 @@
        ona ma własny bufor i własną pamięć do zwolnienia (patrz guardTick). */
     if (entry.engine === "mse" && !state.watchProgram) startGuard();
     else stopGuard();
-    if (entry.engine === "mse") startMseSource(entry);
+    if (entry.engine === "exo") startExoSource(entry);
+    else if (entry.engine === "mse") startMseSource(entry);
     else if (entry.engine === "hls") startHlsSource(entry);
     else playSource(entry.url);
     /* Budziki uzbrajamy PO starcie silnika: MSE i HLS tworzą w środku własny
        token (unieważniają poprzednie wczytywanie), więc token wzięty wcześniej
        nigdy by się nie zgadzał i budzik nie zadziałałby wcale — a to właśnie on
-       ratuje czarny obraz. */
+       ratuje czarny obraz. Droga natywna pilnuje się sama (patrz armExoWatchdog):
+       jej obrazu nie ma w elemencie <video>, więc te budziki widziałyby tylko
+       czarny ekran i ucięłyby kanał w połowie wczytywania. */
     var token = state.engineToken;
-    armStartWatchdog(token);
-    armPictureWatchdog(token);
+    if (entry.engine !== "exo") {
+      armStartWatchdog(token);
+      armPictureWatchdog(token);
+    }
     /* który sposób odtwarzania właśnie startuje — w panelu diagnostyki widać
        wtedy całe przejście kolejki (natywnie → HLS → MSE), a nie tylko stan,
        na którym kanał się zatrzymał */
@@ -5224,6 +5481,11 @@
   /* Rozdzielczość znamy od „loadedmetadata” — wymiary klatki to jedyny ślad,
      że to naprawdę 4K (ustawienia strumienia w playliście bywają nieprawdziwe). */
   function videoIsUhd() {
+    /* obraz systemowy nie ma elementu <video> — rozdzielczość klatki przychodzi
+       z mostu (patrz exoEvent) */
+    if (state.engine === "exo") {
+      return (state.exoHeight | 0) >= 1440 || (state.exoWidth | 0) >= 2560;
+    }
     var video = $("video");
     if (!video) return false;
     return (video.videoHeight | 0) >= 1440 || (video.videoWidth | 0) >= 2560;
@@ -5650,6 +5912,13 @@
     state.guardRecycles = 0;
     state.guardGaveUp = false;
     stopGuard();
+    /* obraz systemowy też liczy się od zera: stan z poprzedniego kanału (czy leciał,
+       jaką miał klatkę) nie może opisywać nowego (patrz startExoSource) */
+    state.exoPlaying = false;
+    state.exoWidth = 0;
+    state.exoHeight = 0;
+    state.exoPictureWaited = false;
+    markExoMode(false);
     /* nazwa kanału mówi wprost, że to 4K — rozpoznajemy to przed startem
        odtwarzania, żeby wymuszona warstwa obrazu nie zdążyła wejść kanałowi
        w drogę (patrz markUhdChannel) */
@@ -5751,6 +6020,8 @@
     clearInterval(state.osdTicker);
     /* obraz zamknięty — nie ma już czego pilnować (patrz guardTick) */
     stopGuard();
+    /* obraz systemowy gaśnie razem z kanałem, a strona wraca do zwykłego wyglądu */
+    stopExo();
     state.retryTimer = null;
     state.stableTimer = null;
     state.recentTimer = null;
@@ -7210,6 +7481,11 @@
 
   /* ⏵‖ (przycisk na pasku i klawisz play/pauza na pilocie). */
   function togglePlayPause() {
+    if (exoActive()) {
+      if (state.exoPlaying) pausePlayback();
+      else resumePlayback();
+      return;
+    }
     var video = $("video");
     if (!video) return;
     if (video.paused) resumePlayback();
@@ -7219,6 +7495,14 @@
   /* Pauza na kanale na żywo zapamiętuje chwilę zatrzymania — obraz leci dalej,
      więc wznowienie musi wrócić dokładnie tam (patrz resumePlayback). */
   function pausePlayback() {
+    if (exoActive()) {
+      if (!state.isArchive && state.watchChannel) state.livePauseAt = Date.now();
+      state.exoPlaying = false;
+      exoPlay(false);
+      showOsd();
+      updateOsd();
+      return;
+    }
     var video = $("video");
     if (!video) return;
     if (!state.isArchive && state.watchChannel) state.livePauseAt = Date.now();
@@ -7232,9 +7516,6 @@
      kończące się teraz). Bez archiwum — albo przy krótkiej pauzie — zwykłe
      wznowienie odtwarzacza. */
   function resumePlayback() {
-    var video = $("video");
-    if (!video) return;
-
     var channel = state.watchChannel;
     var pausedAt = state.livePauseAt;
     state.livePauseAt = 0;
@@ -7251,6 +7532,17 @@
       return;
     }
 
+    /* obraz systemowy wznawia się przez most — elementu <video> w nim nie ma */
+    if (exoActive()) {
+      state.exoPlaying = true;
+      exoPlay(true);
+      updateOsd();
+      scheduleOsdHide();
+      return;
+    }
+
+    var video = $("video");
+    if (!video) return;
     var promise = video.play();
     if (promise && promise.catch) promise.catch(function () {});
     updateOsd();
@@ -7260,6 +7552,13 @@
   /* 🔇 na pilocie (i przycisk na pasku): wyciszenie dźwięku strumienia.
      Głośność samego telewizora należy do sprzętu — tu wyciszamy odtwarzacz. */
   function toggleMute() {
+    if (exoActive()) {
+      state.exoMuted = !state.exoMuted;
+      exoVolume(state.exoMuted);
+      showOsd();
+      updateOsd();
+      return;
+    }
     var video = $("video");
     if (!video) return;
     video.muted = !video.muted;
@@ -7268,6 +7567,7 @@
   }
 
   function isMuted() {
+    if (exoActive()) return !!state.exoMuted;
     var video = $("video");
     return !!(video && video.muted);
   }
@@ -7378,8 +7678,8 @@
       }
       if (timeEl) {
         timeEl.textContent = engineLabel(state.engine) +
-          (video && video.paused ? " • " + t("osd_paused") : "") +
-          (video && video.muted ? " • " + t("osd_muted") : "");
+          (video && video.paused && !exoActive() ? " • " + t("osd_paused") : "") +
+          (isMuted() ? " • " + t("osd_muted") : "");
       }
       if (hintEl) hintEl.textContent = t("osd_hint_live");
     }
@@ -7408,7 +7708,7 @@
       var timeEl = $("playerTime");
       if (timeEl) {
         timeEl.textContent = formatTime(video.currentTime) + " / " + formatTime(video.duration) +
-          (video.muted ? " • " + t("osd_muted") : "");
+          (isMuted() ? " • " + t("osd_muted") : "");
       }
       return;
     }

@@ -2,16 +2,41 @@ package pl.openiptv.player;
 
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
+import android.graphics.Color;
+import android.media.MediaCodec;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
+
+import androidx.annotation.OptIn;
+import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MediaLibraryInfo;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
+import androidx.media3.common.VideoSize;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
+
+import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
 
@@ -22,6 +47,15 @@ public class MainActivity extends BridgeActivity {
        setPlayerMode). Tylko wtedy oddajemy stronie klawisze multimedialne
        pilota — poza odtwarzaczem zostają systemowi. */
     private boolean playerMode = false;
+
+    /* ---- odtwarzacz systemowy (patrz ODTWARZACZ NATYWNY niżej) ---- */
+    private ExoPlayer player;
+    private SurfaceView surfaceView;
+    private DefaultHttpDataSource.Factory httpFactory;
+    private boolean nativeMuted = false;
+    /* Stan dla app.js czytany przez most nativeState() — most chodzi na własnym
+       wątku, więc nie wolno w nim dotykać odtwarzacza. */
+    private volatile String nativeState = "{\"type\":\"idle\"}";
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -34,6 +68,7 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         applyTvViewport();
         bindExitBridge();
+        initNativePlayer();
     }
 
     /* Fire TV i Android TV zgłaszają ekran o gęstości 2.0, czyli okno 960x540 px
@@ -86,6 +121,77 @@ public class MainActivity extends BridgeActivity {
                 @JavascriptInterface
                 public void setPlayerMode(final boolean on) {
                     playerMode = on;
+                }
+
+                /* ---- odtwarzacz systemowy: app.js woła to samo, co robi każda
+                   aplikacja IPTV na Androidzie — oddaje adres kanału sprzętowemu
+                   dekoderowi (patrz ODTWARZACZ NATYWNY niżej). Metody mostu
+                   chodzą na własnym wątku, więc każda tylko przekazuje robotę na
+                   wątek główny i wraca. ---- */
+
+                @JavascriptInterface
+                public String playNative(final String url, final String userAgent) {
+                    if (url == null || url.isEmpty()) return "error: brak adresu";
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            MainActivity.this.startNative(url, userAgent);
+                        }
+                    });
+                    return "ok";
+                }
+
+                @JavascriptInterface
+                public void stopNative() {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            MainActivity.this.stopNative();
+                        }
+                    });
+                }
+
+                @JavascriptInterface
+                public void setNativePlaying(final boolean playing) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (player != null) player.setPlayWhenReady(playing);
+                        }
+                    });
+                }
+
+                @JavascriptInterface
+                public void setNativeMuted(final boolean muted) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            nativeMuted = muted;
+                            if (player != null) player.setVolume(muted ? 0f : 1f);
+                        }
+                    });
+                }
+
+                /* Stan odtwarzacza czytany bez czekania (app.js sprawdza nim, czy
+                   obraz naprawdę ruszył — patrz armExoWatchdog). */
+                @JavascriptInterface
+                public String nativeState() {
+                    return nativeState;
+                }
+
+                /* Co ten odbiornik potrafi natywnie — panel diagnostyki pokazuje
+                   to obok testu MSE (patrz diagCodecLines w app.js). */
+                @JavascriptInterface
+                public String nativeInfo() {
+                    try {
+                        JSONObject info = new JSONObject();
+                        info.put("media3", MediaLibraryInfo.VERSION);
+                        info.put("api", Build.VERSION.SDK_INT);
+                        info.put("hevc", hasHevcDecoder());
+                        return info.toString();
+                    } catch (Exception error) {
+                        return "";
+                    }
                 }
             }, "OpenIptvNative");
         } catch (Exception ignored) {
@@ -188,6 +294,212 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception error) {
             return "";
         }
+    }
+
+    /* =====================  ODTWARZACZ NATYWNY (ExoPlayer)  =====================
+
+       Dlaczego to jest w ogóle potrzebne: kanał 4K HEVC z playlisty idzie w WebView
+       przez MSE, czyli mpegts.js rozbiera TS i składa fMP4 w JavaScripcie, a dopiero
+       potem dekoder systemowy go dekoduje. Na telewizorze to dwa razy więcej pracy
+       (CPU + pamięć) niż potrzeba — obraz zrywa się, a po dłuższym oglądaniu system
+       zamyka aplikację. Każda „inna aplikacja” IPTV na Androidzie robi to inaczej:
+       oddaje adres kanału wprost odtwarzaczowi systemowemu (ExoPlayer/MediaCodec),
+       który rozbiera TS/HLS w kodzie natywnym i rysuje klatki bezpośrednio na
+       warstwie sprzętowej.
+
+       Dlatego obraz z tego odtwarzacza leci POD stroną: SurfaceView jest pierwszym
+       dzieckiem okna (czyli pod WebView), a WebView i strona są przezroczyste tam,
+       gdzie jest obraz (app.js dodaje klasę „exo-player” — patrz styles.css). Cały
+       interfejs — pasek, EPG, panel diagnostyki — rysuje się nad obrazem jak dotąd.
+
+       Most (OpenIptvNative) jest ten sam co dla przycisku „Wyjdź”: playNative(),
+       stopNative(), setNativePlaying(), setNativeMuted(), nativeState(),
+       nativeInfo(). Zdarzenia z odtwarzacza wracają do strony przez
+       window.__openiptvNativeEvent (patrz app.js). */
+
+    @OptIn(markerClass = UnstableApi.class)
+    private void initNativePlayer() {
+        try {
+            Bridge bridge = getBridge();
+            WebView webView = bridge != null ? bridge.getWebView() : null;
+            ViewGroup root = findViewById(android.R.id.content);
+            if (webView == null || root == null) return;
+
+            /* Warstwa pod stroną: obraz systemowy, domyślnie schowany. */
+            surfaceView = new SurfaceView(this);
+            surfaceView.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER));
+            surfaceView.setBackgroundColor(Color.BLACK);
+            surfaceView.setVisibility(View.GONE);
+            root.addView(surfaceView, 0);
+
+            /* Strona musi być przezroczysta, inaczej zasłoniłaby obraz. */
+            webView.setBackgroundColor(Color.TRANSPARENT);
+
+            /* Bufor na żywo: domyślne 50 s w pamięci odtwarzacza to przy 4K
+               kilkadziesiąt megabajtów i obraz daleko za transmisją. 8–24 s
+               wystarcza na zrywkę łącza, a start nie czeka pół minuty. */
+            DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(8000, 24000, 1500, 4000)
+                .setPrioritizeTimeOverSizeThresholds(false)
+                .build();
+
+            /* Adresy kanałów to często przekierowania http → https i dostawcy
+               sprawdzają identyfikator przeglądarki, więc wysyłamy ten sam, którym
+               posługuje się strona (app.js podaje go w playNative). */
+            httpFactory = new DefaultHttpDataSource.Factory()
+                .setConnectTimeoutMs(8000)
+                .setReadTimeoutMs(8000)
+                .setAllowCrossProtocolRedirects(true);
+
+            player = new ExoPlayer.Builder(this)
+                .setLoadControl(loadControl)
+                .setMediaSourceFactory(new DefaultMediaSourceFactory(httpFactory))
+                .build();
+            player.setAudioAttributes(AudioAttributes.DEFAULT, true);
+            player.setVideoSurfaceView(surfaceView);
+            player.addListener(new Player.Listener() {
+                @Override
+                public void onPlaybackStateChanged(int state) {
+                    if (state == Player.STATE_READY) emitNative("playing", null, 0, 0);
+                    else if (state == Player.STATE_BUFFERING) emitNative("buffering", null, 0, 0);
+                    else if (state == Player.STATE_ENDED) emitNative("ended", null, 0, 0);
+                }
+
+                @Override
+                public void onIsPlayingChanged(boolean playing) {
+                    emitNative(playing ? "playing" : "paused", null, 0, 0);
+                }
+
+                @Override
+                public void onVideoSizeChanged(VideoSize size) {
+                    /* Wymiary klatki to jedyny pewny znak, że jest obraz (a nie sam
+                       dźwięk) — app.js czeka na nie swoim budzikiem. */
+                    emitNative("size", null, size.width, size.height);
+                }
+
+                @Override
+                public void onPlayerError(PlaybackException error) {
+                    emitNative("error", error != null ? error.getMessage() : "?", 0, 0);
+                    MainActivity.this.stopNative();
+                }
+            });
+        } catch (Exception ignored) {
+            /* Brak warstwy natywnej nie może blokować aplikacji — strona ma swoje
+               drogi odtwarzania (patrz buildSourceQueue w app.js). */
+            player = null;
+            surfaceView = null;
+        }
+    }
+
+    private void startNative(String url, String userAgent) {
+        if (player == null || surfaceView == null || url == null || url.isEmpty()) return;
+        try {
+            if (httpFactory != null && userAgent != null && !userAgent.isEmpty()) {
+                httpFactory.setUserAgent(userAgent);
+            }
+            surfaceView.setVisibility(View.VISIBLE);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            player.setMediaItem(MediaItem.fromUri(Uri.parse(url)));
+            player.setVolume(nativeMuted ? 0f : 1f);
+            player.prepare();
+            player.setPlayWhenReady(true);
+        } catch (Exception error) {
+            emitNative("error", error.getMessage(), 0, 0);
+            stopNative();
+        }
+    }
+
+    private void stopNative() {
+        nativeState = "{\"type\":\"idle\"}";
+        try {
+            if (player != null) {
+                player.stop();
+                player.clearMediaItems();
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            if (surfaceView != null) surfaceView.setVisibility(View.GONE);
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /* Zdarzenie dla strony: app.js czyta z niego stan obrazu (patrz
+       __openiptvNativeEvent). Budowane przez JSONObject, bo komunikatu błędu nie
+       wolno przepuścić przez cudzysłów. */
+    private void emitNative(final String type, final String message, final int width, final int height) {
+        String json;
+        try {
+            JSONObject event = new JSONObject();
+            event.put("type", type);
+            if (message != null) event.put("message", message);
+            if (width > 0) event.put("width", width);
+            if (height > 0) event.put("height", height);
+            json = event.toString();
+        } catch (Exception error) {
+            json = "{\"type\":\"error\"}";
+        }
+        nativeState = json;
+        final WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+        if (webView == null) return;
+        final String payload = json;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    webView.evaluateJavascript(
+                        "window.__openiptvNativeEvent&&window.__openiptvNativeEvent(" + payload + ")",
+                        null);
+                } catch (Exception ignored) {
+                }
+            }
+        });
+    }
+
+    /* Czy ten odbiornik ma sprzętowy dekoder HEVC — bez niego kanał 4K nie ruszy
+       żadną drogą, a panel diagnostyki mówi to wprost (patrz diagCodecLines). */
+    private boolean hasHevcDecoder() {
+        MediaCodec codec = null;
+        try {
+            codec = MediaCodec.createDecoderByType("video/hevc");
+            return codec != null;
+        } catch (Exception error) {
+            return false;
+        } finally {
+            if (codec != null) {
+                try {
+                    codec.release();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    /* Aplikacja w tle: obraz systemowy nie może lecieć dalej pod spodem (strona
+       dostaje o tym zdarzenie i zgadza się z nim co do stanu obrazu). */
+    @Override
+    public void onStop() {
+        super.onStop();
+        try {
+            if (player != null) player.setPlayWhenReady(false);
+        } catch (Exception ignored) {
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        try {
+            if (player != null) {
+                player.release();
+                player = null;
+            }
+        } catch (Exception ignored) {
+        }
+        super.onDestroy();
     }
 }
 

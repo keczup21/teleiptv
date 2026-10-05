@@ -20,6 +20,17 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.6] — 2026-10-05
+
+### Dodano
+- **Kanał na żywo gra odtwarzaczem odbiornika, a nie przez JavaScript** — na Androidzie adres kanału idzie wprost do odtwarzacza systemowego (ExoPlayer), który rozbiera MPEG-TS i playlisty sprzętowo; obraz 4K nie przechodzi już przez JavaScript i MSE, więc nie zrywa się i nie zabiera pamięci, od której system zamykał aplikację.
+- **Panel diagnostyki pokazuje odtwarzacz systemowy i jego dekoder 4K** — nowy wiersz mówi, jaka jest jego wersja, która wersja Androida i czy odbiornik ma sprzętowy dekoder HEVC.
+
+### Poprawiono
+- **Kanał, którego odtwarzacz odbiornika nie ruszy, wraca do dotychczasowych dróg** — brak obrazu w kilka sekund, błąd albo sam dźwięk bez klatek oddają kanał kolejce (odtwarzacz sprzętowy strony → MSE → HLS), więc nic nie zostaje na czarnym ekranie.
+- **Pauza, wyciszenie i przełączanie kanałów działają jak dotąd** — obraz systemowy przyjmuje te same klawisze pilota, a strona jest na ten czas przezroczysta, żeby obraz było widać pod paskiem odtwarzacza.
+- **Kanał z archiwum zostaje na dotychczasowej drodze** — ma skończone okno i wymaga przewijania, więc nie idzie do odtwarzacza systemowego.
+
 ## [2.1.5] — 2026-10-05
 
 ### Poprawiono

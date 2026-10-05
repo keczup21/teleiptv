@@ -19,6 +19,9 @@ const css = fs.readFileSync(path.join(ROOT, "www", "styles.css"), "utf8").replac
 /* natywna obsługa pilota (klawisze multimedialne) — patrz sekcja 19 */
 const java = fs.readFileSync(path.join(ROOT, "android", "app", "src", "main", "java",
   "pl", "openiptv", "player", "MainActivity.java"), "utf8").replace(/\r\n/g, "\n");
+/* paczka Androida i jej wersje (patrz sekcja 27: odtwarzacz systemowy) */
+const gradle = fs.readFileSync(path.join(ROOT, "android", "app", "build.gradle"), "utf8").replace(/\r\n/g, "\n");
+const gradleVars = fs.readFileSync(path.join(ROOT, "android", "variables.gradle"), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
 function check(name, cond, extra) {
@@ -1359,7 +1362,7 @@ check("brak obrazu wykrywany po wymiarach klatki, nie po stanie odtwarzania",
   src.indexOf("return !!video && (video.videoWidth | 0) > 0 && (video.videoHeight | 0) > 0;") > 0 &&
   src.indexOf("var PICTURE_TIMEOUT = 6000;") > 0);
 check("budziki obrazu uzbrajane PO starcie silnika (token MSE/HLS inaczej je uniewaznial)",
-  src.indexOf("armStartWatchdog(token);\n    armPictureWatchdog(token);") > 0 &&
+  src.indexOf("if (entry.engine !== \"exo\") {\n      armStartWatchdog(token);\n      armPictureWatchdog(token);\n    }") > 0 &&
   src.indexOf("if (typeof token !== \"number\") token = state.engineToken;") > 0);
 check("pierwsza klatka zdejmuje budzik i zapamietuje sposob odtwarzania",
   src.indexOf("function notePicture()") > 0 &&
@@ -1942,7 +1945,16 @@ const codeQueue = src.slice(queueStart, queueEnd);
 if (codeQueue.indexOf("function preferEngine(queue, hint)") < 0) {
   throw new Error("Wyciety blok nie ma preferEngine");
 }
-const queueBox = { settings: { engineHint: "" } };
+const queueBox = {
+  settings: { engineHint: "" },
+  /* Kolejka pyta most odtwarzacza systemowego, czy jest dostępny (patrz exoBridge
+     w app.js): w atrapie włącza go opcja „exo”, a „watchProgram” mówi, że to
+     archiwum. Bez tego kanał idzie dotychczasowymi drogami, tak jak na webOS. */
+  state: { watchProgram: null },
+  exoBridge: function () {
+    return queueBox.settings.exo === true ? { playNative: function () { return "ok"; } } : null;
+  }
+};
 run(codeQueue, queueBox);
 function engines(url) {
   return queueBox.buildSourceQueue(url).map(function (e) { return e.engine; });
@@ -1986,6 +1998,33 @@ check("uruchomione: zapasowy .m3u8 nie wypycha sprawdzonego adresu .ts (kanal 4K
   JSON.stringify(engines("http://s/x.ts")));
 queueBox.settings.engineHint = "bogus";
 check("uruchomione: nieznana pamiec nic nie psuje",
+  engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
+queueBox.settings.engineHint = "";
+/* Kanał na żywo w aplikacji na Androidzie idzie najpierw do odtwarzacza odbiornika
+   (ExoPlayer) — to on rozbiera TS i HLS sprzętowo, więc tylko on daje 4K bez
+   zrywania (patrz startExoSource). Gdy zawiedzie, kolejka idzie dalej jak dotąd. */
+queueBox.settings.exo = true;
+const qExo = engines("http://s/x.ts");
+check("uruchomione: kanal na zywo idzie najpierw do odtwarzacza systemowego",
+  qExo.join(",") === "exo,native,mse,native,hls" &&
+  queueBox.buildSourceQueue("http://s/x.ts")[0].url === "http://s/x.ts",
+  JSON.stringify(qExo));
+queueBox.settings.engineHint = "mse";
+const qExoHint = queueBox.buildSourceQueue("http://s/x.ts");
+check("uruchomione: zapamietany silnik nie omija odtwarzacza systemowego",
+  qExoHint.map(function (e) { return e.engine; }).join(",") === "exo,native,mse,native,hls" &&
+  qExoHint.length === 5,
+  JSON.stringify(qExoHint.map(function (e) { return e.engine; })));
+/* Archiwum zostaje na <video>/MSE: jego okno jest skończone i wymaga przewijania. */
+queueBox.state.watchProgram = { title: "Wiadomosci", start: 1, end: 2 };
+queueBox.settings.engineHint = "";
+const qExoArchive = engines("http://s/x.ts");
+check("uruchomione: archiwum zostaje na dotychczasowych drogach",
+  qExoArchive.indexOf("exo") < 0 && qExoArchive.join(",") === "native,mse,native,hls",
+  JSON.stringify(qExoArchive));
+queueBox.state.watchProgram = null;
+queueBox.settings.exo = false;
+check("uruchomione: bez mostu (webOS, przegladarka) kolejka jest jak dotad",
   engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
 
 
@@ -2475,7 +2514,7 @@ check("kondycja obrazu: budzik chodzi tylko przy obrazie na zywo przez MSE",
   src.indexOf('if (entry.engine === "mse" && !state.watchProgram) startGuard();\n    else stopGuard();') > 0 &&
   src.indexOf('clearInterval(state.guardTicker);\n    state.guardTicker = null;') > 0 &&
   src.indexOf('stopGuard();\n    if (!instance) return;') > 0 &&
-  src.indexOf('stopGuard();\n    state.retryTimer = null;') > 0);
+  src.indexOf('stopGuard();\n    /* obraz systemowy gaśnie razem z kanałem') > 0);
 check("kondycja obrazu: nowy kanal liczy kondycje od zera",
   src.indexOf('state.guardRecycles = 0;\n    state.guardGaveUp = false;\n    stopGuard();') > 0);
 check("panel diagnostyki: pokazuje pamiec interfejsu, zrywy i przestrajania",
@@ -2627,6 +2666,256 @@ gh.api.stopGuard();
 check("kondycja obrazu: zamkniecie obrazu gasi budzik",
   gh.calls.stopped === 1 && gh.api.state.guardTicker === null);
 
+
+/* --- 27. odtwarzacz systemowy (Android: ExoPlayer pod strona) ---------------
+   Kanał na żywo idzie wprost do odtwarzacza odbiornika: on rozbiera TS i HLS
+   w kodzie natywnym, więc 4K nie musi przechodzić przez JavaScript i MSE (i dlatego
+   nie zrywa się ani nie zabiera pamięci). Strona oddaje mu adres przez ten sam most
+   co przy pilocie, a obraz rysuje się POD nią — nazwy metod i zdarzeń muszą się
+   zgadzać co do znaku, bo inaczej wywołanie trafia w pustkę i kanał wraca do
+   JavaScriptu, czyli do problemu, który ta droga rozwiązuje. */
+check("odtwarzacz systemowy: most jest ten sam co przy pilocie i ma wszystkie metody",
+  java.indexOf("\"OpenIptvNative\"") > 0 &&
+  src.indexOf("window.OpenIptvNative") > 0 &&
+  java.indexOf("public String playNative(final String url, final String userAgent)") > 0 &&
+  java.indexOf("public void stopNative()") > 0 &&
+  java.indexOf("public void setNativePlaying(final boolean playing)") > 0 &&
+  java.indexOf("public void setNativeMuted(final boolean muted)") > 0 &&
+  java.indexOf("public String nativeState()") > 0 &&
+  java.indexOf("public String nativeInfo()") > 0 &&
+  src.indexOf("bridge.playNative(entry.url, navigator.userAgent || \"\")") > 0 &&
+  src.indexOf("bridge.setNativePlaying(playing !== false)") > 0 &&
+  src.indexOf("bridge.setNativeMuted(muted === true)") > 0 &&
+  src.indexOf("bridge.stopNative()") > 0 &&
+  src.indexOf("bridge.nativeInfo()") > 0);
+check("odtwarzacz systemowy: zdarzenia wracaja do strony pod ta sama nazwa",
+  java.indexOf("window.__openiptvNativeEvent&&window.__openiptvNativeEvent(") > 0 &&
+  src.indexOf("window.__openiptvNativeEvent = exoEvent;") > 0 &&
+  src.indexOf("function exoEvent(event)") > 0 &&
+  java.indexOf("onVideoSizeChanged(VideoSize size)") > 0 &&
+  java.indexOf("onIsPlayingChanged(boolean playing)") > 0 &&
+  java.indexOf("onPlayerError(PlaybackException error)") > 0);
+check("odtwarzacz systemowy: obraz rysuje sie pod strona, wiec strona jest przezroczysta",
+  java.indexOf("root.addView(surfaceView, 0);") > 0 &&
+  java.indexOf("webView.setBackgroundColor(Color.TRANSPARENT);") > 0 &&
+  src.indexOf("root.classList.toggle(\"exo-player\", want)") > 0 &&
+  src.indexOf("document.body.classList.toggle(\"exo-player\", want)") > 0 &&
+  css.indexOf("html.exo-player, body.exo-player { background: transparent; }") > 0 &&
+  css.indexOf("body.exo-player .screen { background: transparent; }") > 0);
+check("odtwarzacz systemowy: bufor na zywo krotszy niz domyslne 50 s",
+  java.indexOf(".setBufferDurationsMs(8000, 24000, 1500, 4000)") > 0 &&
+  java.indexOf("player.setVideoSurfaceView(surfaceView);") > 0 &&
+  java.indexOf("player.setMediaItem(MediaItem.fromUri(Uri.parse(url)));") > 0 &&
+  java.indexOf("setAllowCrossProtocolRedirects(true)") > 0 &&
+  java.indexOf("FLAG_KEEP_SCREEN_ON") > 0);
+check("odtwarzacz systemowy: odtwarzacz odbiornika jest w paczce Androida (takze HLS)",
+  gradle.indexOf("androidx.media3:media3-exoplayer:$media3Version") > 0 &&
+  gradle.indexOf("androidx.media3:media3-exoplayer-hls:$media3Version") > 0 &&
+  gradleVars.indexOf("media3Version = '1.4.1'") > 0);
+check("odtwarzacz systemowy: bez mostu (webOS, przegladarka) droga jest pomijana",
+  src.indexOf("function exoBridge() {") > 0 &&
+  src.indexOf("if (!platformInfo.native) return null;") > 0 &&
+  src.indexOf("if (!bridge || typeof bridge.playNative !== \"function\") return null;") > 0);
+check("odtwarzacz systemowy: panel diagnostyki pokazuje odtwarzacz odbiornika i jego HEVC",
+  src.indexOf("function exoInfo() {") > 0 &&
+  src.indexOf("var native = exoInfo();") > 0 &&
+  src.indexOf("t(\"diag_native_player\")") > 0 &&
+  src.indexOf("diag_native_player: \"odtwarzacz systemowy (ExoPlayer)\"") > 0 &&
+  src.indexOf("diag_native_player: \"system player (ExoPlayer)\"") > 0 &&
+  java.indexOf("MediaCodec.createDecoderByType(\"video/hevc\")") > 0);
+check("odtwarzacz systemowy: nowe napisy sa w obu jezykach",
+  src.indexOf("engine_exo: \"odtwarzacz systemowy\"") > 0 &&
+  src.indexOf("engine_exo: \"system player\"") > 0 &&
+  src.indexOf("diag_exo: \"obraz systemowy\"") > 0 &&
+  src.indexOf("diag_exo: \"system picture\"") > 0 &&
+  src.indexOf("diag_exo_start: \"oddaję kanał odtwarzaczowi systemowemu\"") > 0 &&
+  src.indexOf("diag_exo_start: \"handing the channel to the system player\"") > 0);
+
+/* Zachowanie drogi natywnej, nie tylko obecność kodu: atrapa mostu (Java) + atrapa
+   elementu <video>, którą droga natywna gasi. Zegar i budziki w rękach testu. */
+const exoStart = src.indexOf("var EXO_START_WAIT = 9000;");
+const exoEnd = src.indexOf("/* Kolejka prób dla kanału.", exoStart);
+if (exoStart < 0 || exoEnd <= exoStart) throw new Error("Nie znalazlem bloku odtwarzacza systemowego w app.js");
+const exoCode = src.slice(exoStart, exoEnd);
+["exoBridge", "exoInfo", "exoActive", "markExoMode", "clearVideoQuietly", "exoPlay",
+  "exoVolume", "startExoSource", "stopExo", "exoEvent", "armExoWatchdog"].forEach(function (fn) {
+  if (exoCode.indexOf("function " + fn) < 0) {
+    throw new Error("Wyciety blok odtwarzacza systemowego nie ma " + fn);
+  }
+});
+
+function exoHarness(o) {
+  o = o || {};
+  const calls = { errors: [], notes: [], played: [], playCalls: [], muted: [], stopped: 0, timers: [] };
+  const classes = { html: [], body: [] };
+  const toggle = function (list, name, on) {
+    const at = list.indexOf(name);
+    if (on && at < 0) list.push(name);
+    if (!on && at >= 0) list.splice(at, 1);
+  };
+  /* atrapa mostu: app.js woła dokładnie te same metody, co prawdziwa Java */
+  const bridge = {
+    playNative: function (url, ua) { calls.played.push({ url: url, ua: ua }); return o.playResult || "ok"; },
+    stopNative: function () { calls.stopped++; },
+    setNativePlaying: function (playing) { calls.playCalls.push(playing); },
+    setNativeMuted: function (muted) { calls.muted.push(muted); },
+    nativeState: function () { return "{\"type\":\"idle\"}"; },
+    nativeInfo: function () { return o.info === undefined ? "{\"media3\":\"1.4.1\",\"api\":34,\"hevc\":true}" : o.info; }
+  };
+  const video = {
+    pause: function () { calls.videoPaused = true; },
+    removeAttribute: function () { calls.videoCleared = true; },
+    load: function () {}
+  };
+  const sandbox = {
+    platformInfo: { native: o.native !== false, os: "androidtv" },
+    navigator: { userAgent: "UA-4K" },
+    state: {
+      engine: o.engine || "exo",
+      engineToken: 3,
+      watchChannel: o.noChannel === true ? null : { name: "Eleven Sports 1 4K" },
+      watchProgram: null,
+      engineLoading: true,
+      engineInstance: null,
+      exoPlaying: o.playing === true,
+      exoWidth: o.width | 0,
+      exoHeight: o.height | 0,
+      exoMuted: o.muted === true,
+      exoPictureWaited: false,
+      watchStart: 0,
+      startTimer: null
+    },
+    t: function (key) { return "<" + key + ">"; },
+    $: function (id) {
+      if (id === "video") return video;
+      return { classList: { add: function () {}, remove: function () {} }, textContent: "" };
+    },
+    document: {
+      documentElement: { classList: { toggle: function (name, on) { toggle(classes.html, name, on); } } },
+      body: { classList: { toggle: function (name, on) { toggle(classes.body, name, on); } } }
+    },
+    OpenIptvNative: o.noBridge === true ? {} : bridge,
+    /* token bierzemy z tego samego stanu, co atrapa: budzik porównuje go ze sobą */
+    nextEngineToken: function () { return sandbox.state.engineToken; },
+    engineName: function (engine) {
+      return "<engine_" + (engine === "exo" || engine === "mse" || engine === "hls" ? engine : "native") + ">";
+    },
+    handlePlaybackError: function (message) { calls.errors.push(message); },
+    diagNote: function (note) { calls.notes.push(note); },
+    noteStreamActivity: function () {},
+    scheduleRecentRecord: function () {},
+    updateOsd: function () {},
+    scheduleOsdHide: function () {},
+    clearStartWatchdog: function () { sandbox.state.startTimer = null; },
+    setTimeout: function (fn) { calls.timers.push(fn); return calls.timers.length; },
+    clearTimeout: function () {}
+  };
+  /* window to ten sam obiekt co zbiór zmiennych globalnych: tak działa i most, i
+     zdarzenie window.__openiptvNativeEvent, które app.js na nim zapisuje */
+  sandbox.window = sandbox;
+  run(exoCode, sandbox);
+  return {
+    api: sandbox, calls: calls, classes: classes,
+    /* wywołanie budzika czekającego w kolejce (jakby minął czas) */
+    fire: function () {
+      const queued = calls.timers.splice(0);
+      queued.forEach(function (fn) { fn(); });
+      return queued.length;
+    }
+  };
+}
+
+let xh = exoHarness({});
+xh.api.startExoSource({ engine: "exo", url: "http://s/live/4k.m3u8" });
+check("odtwarzacz systemowy: adres kanalu idzie do mostu razem z identyfikatorem przegladarki",
+  xh.calls.played.length === 1 && xh.calls.played[0].url === "http://s/live/4k.m3u8" &&
+  xh.calls.played[0].ua === "UA-4K" && xh.calls.errors.length === 0,
+  JSON.stringify(xh.calls.played));
+check("odtwarzacz systemowy: droga natywna gasi <video> i wlacza przezroczystosc strony",
+  xh.calls.videoPaused === true && xh.calls.videoCleared === true &&
+  xh.classes.html.indexOf("exo-player") >= 0 && xh.classes.body.indexOf("exo-player") >= 0 &&
+  xh.api.state.engine === "exo" && xh.api.state.engineLoading === true);
+check("odtwarzacz systemowy: start uzbraja budzik i melduje sie w diagnozie",
+  xh.calls.timers.length === 1 && xh.calls.notes.indexOf("<diag_exo_start>") >= 0);
+
+/* Nic nie ruszyło w czasie startu: kanał wraca do kolejki (MSE/HLS), a nie zostaje
+   na czarnym ekranie. */
+xh.fire();
+check("odtwarzacz systemowy: brak obrazu w czasie startu oddaje kanal kolejce",
+  xh.calls.errors.length === 1 && xh.calls.errors[0].indexOf("<engine_exo>") > 0,
+  JSON.stringify(xh.calls.errors));
+
+/* Ruszyło i są klatki: budzik nie ma już nic do roboty. */
+xh = exoHarness({});
+xh.api.startExoSource({ engine: "exo", url: "http://s/live/4k.m3u8" });
+xh.api.exoEvent({ type: "size", width: 3840, height: 2160 });
+xh.api.exoEvent({ type: "playing" });
+xh.fire();
+check("odtwarzacz systemowy: obraz jest (4K) — budzik nic nie robi",
+  xh.calls.errors.length === 0 && xh.api.state.exoWidth === 3840);
+
+/* Ruszyło, ale klatek nie ma: jeden oddech na obraz, potem kolejka. */
+xh = exoHarness({});
+xh.api.startExoSource({ engine: "exo", url: "http://s/live/4k.m3u8" });
+xh.api.exoEvent({ type: "playing" });
+xh.fire();
+check("odtwarzacz systemowy: dzwiek bez klatek dostaje jeszcze jedna probe",
+  xh.calls.errors.length === 0 && xh.api.state.exoPictureWaited === true && xh.calls.timers.length === 1,
+  JSON.stringify({ errors: xh.calls.errors, timers: xh.calls.timers.length }));
+xh.fire();
+check("odtwarzacz systemowy: dzwiek bez klatek (takze tu) oddaje kanal kolejce",
+  xh.calls.errors.length === 1 && xh.calls.errors[0].indexOf("<err_no_picture>") > 0,
+  JSON.stringify(xh.calls.errors));
+
+/* Zdarzenia z mostu trzymają ten sam stan, co zdarzenia <video> na innych drogach. */
+xh = exoHarness({});
+xh.api.startExoSource({ engine: "exo", url: "http://s/live/4k.m3u8" });
+xh.api.exoEvent({ type: "size", width: 3840, height: 2160 });
+xh.api.exoEvent({ type: "playing" });
+check("odtwarzacz systemowy: zdarzenie mostu mowi, ze obraz leci i jaka ma klatke",
+  xh.api.state.exoPlaying === true && xh.api.state.engineLoading === false &&
+  xh.api.state.exoWidth === 3840 && xh.api.state.exoHeight === 2160);
+xh.api.exoEvent({ type: "paused" });
+check("odtwarzacz systemowy: pauza z mostu gasi stan obrazu", xh.api.state.exoPlaying === false);
+xh.api.exoEvent({ type: "error", message: "brak kodeka" });
+check("odtwarzacz systemowy: blad mostu oddaje kanal kolejce (z powodem)",
+  xh.calls.errors.length === 1 && xh.calls.errors[0].indexOf("brak kodeka") > 0,
+  JSON.stringify(xh.calls.errors));
+
+/* Pauza i wyciszenie idą mostem, a nie elementem <video>. */
+xh = exoHarness({ playing: true });
+xh.api.startExoSource({ engine: "exo", url: "http://s/live/4k.m3u8" });
+xh.api.exoVolume(true);
+xh.api.exoPlay(false);
+check("odtwarzacz systemowy: wyciszenie i pauza ida mostem",
+  xh.calls.muted.join(",") === "true" && xh.calls.playCalls.join(",") === "false" &&
+  xh.api.exoActive() === true);
+xh.api.stopExo();
+check("odtwarzacz systemowy: zamkniecie obrazu gasi odtwarzacz i zdejmuje przezroczystosc",
+  xh.calls.stopped === 1 && xh.api.state.exoPlaying === false &&
+  xh.classes.html.indexOf("exo-player") < 0 && xh.classes.body.indexOf("exo-player") < 0);
+
+/* Most, którego nie ma (webOS, przeglądarka, starsza paczka) — kanał idzie dalej. */
+xh = exoHarness({ native: false });
+xh.api.startExoSource({ engine: "exo", url: "http://s/live/4k.m3u8" });
+check("odtwarzacz systemowy: bez mostu kanal idzie kolejna droga (bez wywolania)",
+  xh.api.exoBridge() === null && xh.calls.played.length === 0 && xh.calls.errors.length === 1);
+xh = exoHarness({ noBridge: true });
+check("odtwarzacz systemowy: starsza paczka bez playNative tez jest pomijana",
+  xh.api.exoBridge() === null);
+xh = exoHarness({ playResult: "error: brak adresu" });
+xh.api.startExoSource({ engine: "exo", url: "" });
+check("odtwarzacz systemowy: odmowa mostu konczy probe z powodem",
+  xh.calls.played.length === 1 && xh.calls.errors.length === 1 &&
+  xh.calls.errors[0].indexOf("error: brak adresu") > 0, JSON.stringify(xh.calls.errors));
+
+/* Rozpoznanie odtwarzacza odbiornika (panel diagnostyki). */
+xh = exoHarness({});
+check("odtwarzacz systemowy: panel czyta z mostu wersje i sprzetowy HEVC",
+  xh.api.exoInfo() !== null && xh.api.exoInfo().media3 === "1.4.1" &&
+  xh.api.exoInfo().hevc === true);
+xh = exoHarness({ info: "" });
+check("odtwarzacz systemowy: brak odpowiedzi mostu nie psuje panelu", xh.api.exoInfo() === null);
 
 /* --- 26. panel diagnostyki obrazu (dzwiek gra, a obrazu nie ma) ----------
    Kanal 4K zostawial czarny ekran i z kanapy nie bylo widac dlaczego: dzwiek

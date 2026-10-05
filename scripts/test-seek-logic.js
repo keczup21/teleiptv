@@ -113,7 +113,7 @@ function harness(o) {
    o wznowieniu na kanale na zywo (catch-up) i w archiwum. */
 function ctrlHarness(o) {
   o = o || {};
-  const calls = { play: [], played: 0, paused: 0, osd: 0 };
+  const calls = { play: [], played: 0, paused: 0, osd: 0, exoPlayed: [], exoMuted: null };
   const video = {
     paused: !!o.paused,
     muted: !!o.muted,
@@ -138,6 +138,11 @@ function ctrlHarness(o) {
     showOsd: function () { calls.osd++; },
     updateOsd: function () {},
     scheduleOsdHide: function () {},
+    /* Odtwarzacz systemowy (patrz startExoSource): w atrapie włącza go opcja „exo”.
+       Jego obrazu nie ma w elemencie <video>, więc pauza i wyciszenie idą mostem. */
+    exoActive: function () { return o.exo === true; },
+    exoPlay: function (playing) { calls.exoPlayed.push(playing); },
+    exoVolume: function (muted) { calls.exoMuted = muted; },
     t: function (k) { return k; },
     Date: { now: function () { return NOW; } }
   };
@@ -202,7 +207,9 @@ function playHarness(o) {
     nextSourceEntry: function () {},
     /* kondycja obrazu na żywo (patrz guardTick) — wejście w kanał liczy ją od zera,
        więc zatrzymanie budzika jest tu atrapą: ten blok jej nie uruchamia */
-    stopGuard: function () {}
+    stopGuard: function () {},
+    /* klasa przezroczystości strony dla obrazu systemowego (patrz markExoMode) */
+    markExoMode: function () {}
   };
   vm.createContext(sandbox);
   vm.runInContext(codePlay, sandbox);

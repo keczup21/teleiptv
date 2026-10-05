@@ -11,8 +11,8 @@ android {
         applicationId "pl.openiptv.player"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 48
-        versionName "2.1.5"
+        versionCode 49
+        versionName "2.1.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildFeatures {
             buildConfig true
@@ -43,6 +43,13 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    /* Odtwarzacz systemowy (ExoPlayer): kanał TS/HLS idzie nim prosto do
+       sprzętowego dekodera, bez rozbierania strumienia w JavaScripcie (patrz
+       MainActivity -> ODTWARZACZ NATYWNY oraz app.js -> startExoSource).
+       media3-exoplayer-hls jest potrzebny dla kanałów nadawanych jako playlista
+       (.m3u8) — bez niego taka playlista kończy się błędem „nieobsługiwany typ”. */
+    implementation "androidx.media3:media3-exoplayer:$media3Version"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

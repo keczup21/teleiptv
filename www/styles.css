@@ -467,6 +467,21 @@ body.video-layer-fix .player-screen video {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
 }
+/* ---------- odtwarzacz systemowy (Android: obraz POD stroną) ----------
+   Kanał na żywo oddajemy odtwarzaczowi odbiornika (patrz startExoSource w app.js),
+   a on rysuje klatki na własnej warstwie POD stroną — tak gra każda inna aplikacja
+   IPTV na Androidzie i tylko tak 4K idzie sprzętowo, bez JavaScriptu i MSE. Żeby ten
+   obraz było widać, strona musi być w tym miejscu przezroczysta; klasę zakłada
+   app.js na <html> i <body> tylko na czas takiego odtwarzania (markExoMode). */
+html.exo-player, body.exo-player { background: transparent; }
+body.exo-player .screen { background: transparent; }
+/* Pasek odtwarzacza leży nad obrazem z innej warstwy, więc rozmywanie tła nie ma
+   czego pokazać — zamiast szkła dostaje zwykłe przygaszenie. */
+body.exo-player .player-overlay {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(0, 0, 0, .78);
+}
 .player-overlay {
   position: absolute;
   left: 40px; right: 40px; bottom: 40px;
