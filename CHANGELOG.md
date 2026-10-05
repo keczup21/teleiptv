@@ -20,6 +20,16 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.5] — 2026-10-05
+
+### Poprawiono
+- **Rozsypujący się obraz 4K startuje od nowa, zamiast zamykać aplikację** — aplikacja liczy zrywy obrazu i klatki odrzucone przez dekoder, a gdy obraz naprawdę przestaje wyrabiać, wystawia ten sam kanał na świeżym odtwarzaczu.
+- **Pamięć wstecz odtwarzacza strumienia TS skrócona do 15–30 s** — przy 4K wstecz trzymane było nawet 180 s, czyli setki megabajtów, po których przeglądarka zaczynała przycinać obraz.
+- **Kolejka odcinków playlisty ma limit** — gdy łącze nie wyrabia za kanałem, obraz dogania transmisję, zamiast zostawać coraz dalej za nią i zabierać pamięć kolejnymi odcinkami.
+- **„Przestrajanie obrazu…” na pasku** — widać, że obraz wraca na świeżo, a nie że kanał przeładowuje się sam.
+- **Panel diagnostyki pokazuje liczbę zrywów i przestrajania oraz pamięć interfejsu** — po tych liczbach widać, czy obraz zrywa się przez ten odtwarzacz, czy przez łącze.
+- **Gdy zrywy wracają także na świeżym strumieniu, panel otwiera się sam** — z liczbami i informacją, że to granica tego odtwarzacza, żeby nie zgadywać, co jest winne.
+
 ## [2.1.4] — 2026-10-05
 
 ### Poprawiono

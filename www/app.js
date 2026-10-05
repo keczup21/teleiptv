@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.4";
+  var APP_VERSION = "2.1.5";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -180,6 +180,17 @@
        (patrz streamStillComing). */
     entryWaitStart: 0,
     lastActivityAt: 0,
+    /* Kondycja obrazu na żywo (patrz guardTick): ile razy obraz stanął i ile klatek
+       odrzucił dekoder w oknie czasu, ile razy odświeżyliśmy już strumień przy tym
+       kanale i czy doszliśmy do granicy tego odtwarzacza. Bez tych liczb „obraz się
+       rozsypał” kończyło się wyjściem z aplikacji, a nie świeżym startem strumienia. */
+    guardTicker: null,
+    guardWindowAt: 0,
+    guardStalls: 0,
+    guardDroppedBase: 0,
+    guardDroppedSum: 0,
+    guardRecycles: 0,
+    guardGaveUp: false,
     /* blokada zdarzeń przewijania listy (rysujemy jedną porcję na raz) */
     listScrollLock: false
   };
@@ -435,6 +446,16 @@
     diag_feeder: "z playlisty",
     diag_feeder_start: "HLS→TS: podaję odtwarzaczowi TS {n} odcinków playlisty",
     diag_feeder_failed: "HLS→TS: {reason}",
+    /* ---------------- 2.1.5: kondycja obrazu na żywo (zrywy, pamięć, świeży strumień) ----------
+       Obraz 4K przez MSE potrafi się rozsypać po dłuższym oglądaniu: dekoder odrzuca
+       klatki, pamięć rośnie, a system zamyka aplikację. Aplikacja mierzy jedno
+       i drugie i wystawia strumień na świeżo — panel mówi, ile razy (patrz guardTick). */
+    diag_health: "KONDYCJA OBRAZU",
+    diag_heap: "pamięć JS", diag_stalls: "zrywy", diag_recycles: "przestrajania",
+    diag_recycle: "obraz się rozsypywał — strumień wystartował ponownie ({n}.)",
+    diag_recycle_stop: "zrywy wracają także na świeżym strumieniu: to granica tego odtwarzacza (MSE w WebView), nie łącze",
+    osd_recycle: "Przestrajanie obrazu…",
+    diag_feeder_drop: "kolejka odcinków skrócona o {n} (obraz nadgania na żywo)",
     epg_none: "Brak danych EPG dla tego kanału.",
     archive_day_today: "Dziś", archive_day_yesterday: "Wczoraj", archive_day_before: "Przedwczoraj",
     archive_limited: "pokazano {shown} z {total}",
@@ -693,6 +714,16 @@
     diag_feeder: "feed from playlist",
     diag_feeder_start: "HLS→TS: feeding {n} playlist segments to the TS player",
     diag_feeder_failed: "HLS→TS: {reason}",
+    /* ---------------- 2.1.5: live picture health (hiccups, memory, fresh stream) ----------
+       A 4K picture over MSE can fall apart after longer watching: the decoder drops
+       frames, memory grows and the system closes the app. The app measures both and
+       brings the stream back on a fresh decoder — the panel says how many times. */
+    diag_health: "PICTURE HEALTH",
+    diag_heap: "JS heap", diag_stalls: "hiccups", diag_recycles: "restarts",
+    diag_recycle: "the picture was falling apart — the stream restarted ({n})",
+    diag_recycle_stop: "hiccups come back on a fresh stream too: this is the limit of this player (MSE in the WebView), not the link",
+    osd_recycle: "Restarting the picture…",
+    diag_feeder_drop: "segment queue trimmed by {n} (catching up with live)",
     diag_encrypted: "encrypted (EXT-X-KEY)", diag_variants: "variants",
     epg_none: "No EPG data for this channel.",
     archive_day_today: "Today", archive_day_yesterday: "Yesterday", archive_day_before: "2 days ago",
@@ -3490,6 +3521,9 @@
          jest wczytywanie strumienia od zera, więc pasek pokazuje skok
          („Cofnięto o 10 s”), a nie „Ładowanie strumienia…” */
       if (seekNotice()) { showOsd(); return; }
+      /* Zrywka liczy się do kondycji obrazu (patrz guardTick): pojedyncza nie znaczy
+         nic, ale ich gęstość mówi już, że ten odtwarzacz nie wyrabia za strumieniem. */
+      noteStall();
       /* Zrywka na kanale na żywo bywa krótsza niż mrugnięcie oka. Komunikat
          pokazujemy więc dopiero wtedy, gdy obraz naprawdę nie wraca: na kanale 4K
          migał on przy każdym odcinku i wyglądało to jak zepsuty kanał, choć obraz
@@ -3602,6 +3636,10 @@
     /* Budziki pilnujące obrazu nie mają już czego pilnować — nowy wpis
        kolejki uzbroi je od nowa (patrz startSourceEntry). */
     clearPictureWatchdog();
+    /* Kondycja obrazu też gaśnie razem z silnikiem: bez tego strumień, którego
+       aplikacja już się wyrzekła (koniec kolejki prób), byłby przez strażnika
+       wskrzeszany w kółko (patrz guardTick). */
+    stopGuard();
     if (!instance) return;
     try { instance.close(); } catch (error) { /* już zamknięty */ }
   }
@@ -3711,6 +3749,16 @@
       }
     }
     return "0.0";
+  }
+
+  /* Ile pamięci zjada sam interfejs. To jedyna liczba, która pokazuje, czy
+     odtwarzanie rośnie w tle — z takiego wzrostu bierze się „aplikacja sama się
+     zamyka” po dłuższym oglądaniu kanału 4K (patrz guardTick). Chromium podaje ją
+     wprost; gdy jej nie ma, w panelu zostaje znak zapytania. */
+  function diagHeapMb() {
+    var memory = window.performance && window.performance.memory;
+    if (!memory || !memory.usedJSHeapSize) return "?";
+    return String(Math.round(memory.usedJSHeapSize / 1048576));
   }
 
   function diagMediaError(video) {
@@ -3824,6 +3872,14 @@
     lines.push(" " + t("diag_size") + ": " + (video.videoWidth | 0) + "×" + (video.videoHeight | 0) +
       " · " + t("diag_frames") + ": " + frames.total +
       " (" + t("diag_dropped") + ": " + frames.dropped + ")");
+    /* Kondycja obrazu: pamięć interfejsu, zrywy i przestrajania. To liczby, po których
+       widać, czy obraz zrywa się przez ten odtwarzacz, czy przez łącze — i czy system
+       ma powód, żeby zamknąć aplikację (patrz guardTick). */
+    lines.push(" " + t("diag_health") + ": " + t("diag_heap") + " " + diagHeapMb() + " MB" +
+      " · " + t("diag_stalls") + ": " + (state.guardStalls | 0) +
+      (state.guardRecycles
+        ? " · " + t("diag_recycles") + ": " + (state.guardRecycles | 0)
+        : ""));
     lines.push(" " + t("diag_audio") + ": " + (video.paused ? t("diag_paused") : t("diag_playing")) +
       " · " + t("diag_time") + ": " + diagSeconds(video.currentTime) + " s" +
       " · " + t("diag_buffer") + ": " + diagBuffered(video) + " s" +
@@ -4178,6 +4234,15 @@
 
   var FEEDER_SEEN_MAX = 480;         /* po ilu odcinkach zapominamy już wysłane adresy */
 
+  /* Ile odcinków może czekać w kolejce na wysłanie. Gdy łącze nie wyrabia za
+     kanałem, odcinki z playlisty przychodzą szybciej, niż je oddajemy — bez tego
+     limitu kolejka rosłaby w nieskończoność i obraz odjeżdżałby od transmisji coraz
+     dalej (patrz _noteLag), a pamięć zamiast wracać rosła (patrz guardTick). Limit
+     jest z zapasem nad okno playlisty 4K (FEEDER_LIVE_SEGMENTS_UHD), bo tyle odcinków
+     bierzemy naraz przy pierwszym odczycie. Nadmiar przepada, więc obraz wraca na
+     żywo — te adresy są już w _seen, więc nie wrócą do kolejki jako „nowe”. */
+  var FEEDER_PENDING_MAX = 8;
+
   /* Ile obrazu czeka w buforze przed miejscem odtwarzania. Liczymy to sami, bo
      mpegts.js trzyma własny zapas dopiero za tym, co już oddał odtwarzaczowi —
      a odtwarzaczowi trzeba podać następny odcinek, zanim skończy się poprzedni.
@@ -4446,6 +4511,14 @@
         if (i < start) continue;
         this._pending.push(url);
       }
+      /* Kolejka jest ograniczona (patrz FEEDER_PENDING_MAX): gdy odcinki przychodzą
+         szybciej, niż je oddajemy, przepadają najstarsze — obraz dogania transmisję,
+         zamiast zostać z niej wyprzedzonym na zawsze. */
+      var extra = this._pending.length - FEEDER_PENDING_MAX;
+      if (extra > 0) {
+        this._pending.splice(0, extra);
+        diagNote(t("diag_feeder_drop", { n: extra }));
+      }
     };
 
     /* Rachunek zapasu jest wspólny z resztą odtwarzania (patrz videoBufferedAhead):
@@ -4618,8 +4691,10 @@
 
          • pamięć wstecz: domyślne 180 s w MSE to przy 4K (kilkanaście megabajtów
            na sekundę) setki megabajtów trzymane bez potrzeby. Przeglądarka zaczyna
-           wtedy przycinać bufor — i to też widać jako zrywanie obrazu. Wstecz
-           wystarczy 20–45 s: tyle, co na chwilowe zatrzymanie i przewinięcie.
+           wtedy przycinać bufor — i to też widać jako zrywanie obrazu. Kanałowi na
+           żywo wstecz nie jest potrzebne nic: 15–30 s wystarcza na chwilowe
+           zatrzymanie, a każdy megabajt mniej to dalej od zamknięcia aplikacji przez
+           system (patrz guardTick — on pilnuje już tylko kondycji obrazu).
 
          • lazyLoad zostaje wyłączony: dane muszą się wczytywać także wtedy, gdy
            odtwarzanie jeszcze nie ruszyło (patrz playWhenBuffered). */
@@ -4628,8 +4703,8 @@
         lazyLoad: false,
         enableStashBuffer: false,
         autoCleanupSourceBuffer: true,
-        autoCleanupMaxBackwardDuration: 45,
-        autoCleanupMinBackwardDuration: 20,
+        autoCleanupMaxBackwardDuration: 30,
+        autoCleanupMinBackwardDuration: 15,
         liveBufferLatencyChasing: false
       };
       /* Kanał nadawany jako playlista (typowy 4K HEVC): mpegts.js nie czyta .m3u8,
@@ -4736,6 +4811,148 @@
       setTimeout(attempt, 250);
     }
     attempt();
+  }
+
+  /* =========  KONDYCJA OBRAZU: ZRYWY, PAMIĘĆ I ŚWIEŻY STRUMIEŃ  =========
+
+     Kanał 4K nadawany jako TS wchodzi do obrazu przez MSE: mpegts.js rozbiera
+     strumień w JavaScripcie, a WebView dekoduje go własnym stosem. Ta droga ma dwa
+     końce, których z kanapy nie widać:
+
+       • obraz zaczyna się zrywać (dekoder nie wyrabia, bufor MSE się przycina),
+       • po dłuższym oglądaniu strumień zabiera tyle pamięci, że system zamyka
+         aplikację.
+
+     Pod tymi objawami bywa i łącze, i dekoder, i samo kodowanie kanału — z jednego
+     zdjęcia panelu tego nie rozstrzygniemy i właśnie dlatego nie zgadujemy. Patrzymy
+     na to, co <video> mówi wprost: ile razy obraz stanął (zrywy liczone w oknie
+     czasu) i ile klatek odrzucił dekoder (webkitDroppedFrameCount — to samo, co
+     pokazuje panel, patrz diagFrames). Gdy obraz naprawdę się rozsypuje, ten sam
+     strumień startuje na świeżym elemencie <video> i świeżym MSE (patrz
+     resetVideoElement): to zwalnia pamięć dekodera i kolejki, których przeglądarka
+     sama nie oddaje. Użytkownik widzi wtedy sekundę „przestrajania”, a nie wyjście
+     z aplikacji.
+
+     Odświeżamy tylko obraz NA ŻYWO i tylko przez MSE: film z archiwum straciłby po
+     tym swoją pozycję, a droga natywna i HLS mają dekoder sprzętowy, któremu nie ma
+     czego zwalniać. Liczba odświeżeń jest ograniczona — kanał, który zrywa się także
+     na świeżym strumieniu, nie naprawi się kolejnym restartem, a pętla restartów
+     zabetonowałaby aplikację. Wtedy panel diagnostyki mówi wprost, że doszliśmy do
+     granicy tego odtwarzacza (patrz diag_recycle_stop). */
+
+  var GUARD_TICK = 1000;             /* co ile patrzymy na kondycję obrazu */
+  var GUARD_WINDOW = 90000;          /* okno, w którym liczą się zrywy i klatki */
+  var GUARD_STALLS = 8;              /* ile zrywów w oknie to już rozsypka */
+  var GUARD_DROPPED = 1500;          /* ile klatek odrzuconych w tym oknie */
+  var GUARD_UPTIME = 20000;          /* świeżego obrazu nie ruszamy */
+  var GUARD_MAX_RECYCLES = 3;        /* ile razy odświeżamy strumień przy kanale */
+
+  /* Budzik kondycji chodzi tylko tam, gdzie ma co pilnować: obraz na żywo przez MSE
+     (patrz startSourceEntry). Poza tym nie ma po co budzić procesora co sekundę. */
+  function startGuard() {
+    if (!state.guardTicker) {
+      state.guardTicker = setInterval(guardTick, GUARD_TICK);
+    }
+    /* okno liczy się od świeżego obrazu: zrywy z poprzedniego kanału (albo z okresu
+       przed odświeżeniem strumienia) nie mogą spadać na ten */
+    state.guardWindowAt = Date.now();
+    state.guardStalls = 0;
+    state.guardDroppedSum = 0;
+    state.guardDroppedBase = 0;
+  }
+
+  function stopGuard() {
+    if (!state.guardTicker) return;
+    clearInterval(state.guardTicker);
+    state.guardTicker = null;
+  }
+
+  /* Zryw: obraz był, stanął i wrócił. Pojedyncze zdarzenie nie znaczy nic (tak
+     zachowuje się każdy kanał na żywo), więc liczymy je w oknie czasu i dopiero
+     gęstość tych zrywów ocenia guardTick. */
+  function noteStall() {
+    if (state.watchProgram || state.engine !== "mse") return;
+    var now = Date.now();
+    if (now - state.guardWindowAt > GUARD_WINDOW) {
+      state.guardWindowAt = now;
+      state.guardStalls = 0;
+      state.guardDroppedSum = 0;
+    }
+    state.guardStalls++;
+  }
+
+  /* Czy wyczerpaliśmy już odświeżenia przy tym kanale (patrz GUARD_MAX_RECYCLES) */
+  function guardLimitReached() {
+    return (state.guardRecycles | 0) >= GUARD_MAX_RECYCLES;
+  }
+
+  /* Czy wolno odświeżyć strumień (patrz komentarz nad sekcją): tylko obraz na żywo,
+     tylko przez MSE, nigdy w pierwszych sekundach po starcie i tylko do wyczerpania
+     limitu odświeżeń. */
+  function guardCanRecycle() {
+    if (!state.watchChannel || state.watchProgram) return false;
+    if (state.engine !== "mse") return false;
+    if (Date.now() - (state.entryWaitStart || 0) < GUARD_UPTIME) return false;
+    return !guardLimitReached();
+  }
+
+  /* Jedna próbka na sekundę: zrywy z okna plus klatki, które dekoder odrzucił od
+     poprzedniej próbki. Liczymy różnicę, a nie sumę od startu kanału, bo licznik
+     zeruje się razem z elementem <video> (patrz resetVideoElement) — po odświeżeniu
+     strumienia nowy element zaczyna od zera i nie wygląda to na skok. */
+  function guardTick() {
+    if (!state.watchChannel) { stopGuard(); return; }
+    var video = $("video");
+    if (!video) return;
+    var now = Date.now();
+    if (now - state.guardWindowAt > GUARD_WINDOW) {
+      state.guardWindowAt = now;
+      state.guardStalls = 0;
+      state.guardDroppedSum = 0;
+    }
+    var total = video.webkitDroppedFrameCount ? video.webkitDroppedFrameCount | 0 : 0;
+    if (total >= state.guardDroppedBase) state.guardDroppedSum += total - state.guardDroppedBase;
+    state.guardDroppedBase = total;
+
+    /* Obraz, któremu dekoder najpierw przestaje wyrabiać, a potem staje — jedno
+       i drugie znaczy to samo: ten odtwarzacz nie nadąża za tym strumieniem. */
+    if (state.guardStalls < GUARD_STALLS && state.guardDroppedSum < GUARD_DROPPED) return;
+    /* Limit odświeżeń wyczerpany: nic już nie restartujemy, tylko pokazujemy liczby
+       z panelu (patrz guardGiveUp). Świeżego obrazu nie ruszamy — zrywy z pierwszych
+       sekund wczytywania nie są jeszcze powodem do restartu. */
+    if (guardLimitReached()) { guardGiveUp(); return; }
+    if (!guardCanRecycle()) return;
+    recycleStream();
+  }
+
+  /* Ten sam strumień na świeżym MSE i świeżym elemencie <video>. To nie jest
+     przejście do następnego sposobu odtwarzania, więc wpis kolejki i liczniki prób
+     (cycle, sourceIndex) zostają bez zmian (patrz nextSourceEntry). */
+  function recycleStream() {
+    var entry = state.sources[state.sourceIndex];
+    if (!entry) return;
+    state.guardRecycles = (state.guardRecycles | 0) + 1;
+    state.guardWindowAt = Date.now();
+    state.guardStalls = 0;
+    state.guardDroppedSum = 0;
+    diagNote(t("diag_recycle", { n: state.guardRecycles }));
+    showPlayerToast(t("osd_recycle"));
+    clearPictureWatchdog();
+    clearStartWatchdog();
+    destroyEngine();
+    startSourceEntry(entry);
+  }
+
+  /* Zrywy wracają na świeżym strumieniu, więc nic już nie zgadujemy: pokazujemy
+     liczby z panelu (pamięć interfejsu, odrzucone klatki, liczba zrywów) — to one
+     mówią, czy granicą jest ten odtwarzacz, czy łącze. Obraz gra dalej. */
+  function guardGiveUp() {
+    if (state.guardGaveUp) return;
+    state.guardGaveUp = true;
+    diagNote(t("diag_recycle_stop"));
+    if (diagVisible()) return;
+    state.diagAutoShown = true;
+    openDiagnostics();
   }
 
   /* Czy hls.js mówi wprost, że tego strumienia nie rozbierze (a nie, że jeden
@@ -4908,6 +5125,10 @@
     /* czy ten wpis czyta playlistę własnym czytnikiem HLS→TS — panel
        diagnostyki pokazuje to wprost (patrz diagStreamLines) */
     state.engineFeeder = !!(entry.engine === "mse" && entry.hls);
+    /* Kondycję obrazu (zrywy i odrzucone klatki) pilnuje tylko droga MSE na żywo: to
+       ona ma własny bufor i własną pamięć do zwolnienia (patrz guardTick). */
+    if (entry.engine === "mse" && !state.watchProgram) startGuard();
+    else stopGuard();
     if (entry.engine === "mse") startMseSource(entry);
     else if (entry.engine === "hls") startHlsSource(entry);
     else playSource(entry.url);
@@ -5421,6 +5642,14 @@
     /* nowy kanał: rozdzielczość i sprzętowa próba liczą się od zera */
     state.uhdSeen = false;
     state.uhdNativeTried = false;
+    /* Kondycja obrazu liczy się przy tym kanale od zera: zrywy i odświeżenia
+       strumienia z poprzedniego obrazu nie mogą tu nic znaczyć (patrz guardTick). */
+    state.guardStalls = 0;
+    state.guardDroppedSum = 0;
+    state.guardDroppedBase = 0;
+    state.guardRecycles = 0;
+    state.guardGaveUp = false;
+    stopGuard();
     /* nazwa kanału mówi wprost, że to 4K — rozpoznajemy to przed startem
        odtwarzania, żeby wymuszona warstwa obrazu nie zdążyła wejść kanałowi
        w drogę (patrz markUhdChannel) */
@@ -5520,6 +5749,8 @@
     clearTimeout(state.okHoldTimer);
     clearTimeout(state.osdTimer);
     clearInterval(state.osdTicker);
+    /* obraz zamknięty — nie ma już czego pilnować (patrz guardTick) */
+    stopGuard();
     state.retryTimer = null;
     state.stableTimer = null;
     state.recentTimer = null;

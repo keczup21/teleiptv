@@ -199,7 +199,10 @@ function playHarness(o) {
     updateOsd: function () {},
     showOsd: function () {},
     bindMediaSession: function () {},
-    nextSourceEntry: function () {}
+    nextSourceEntry: function () {},
+    /* kondycja obrazu na żywo (patrz guardTick) — wejście w kanał liczy ją od zera,
+       więc zatrzymanie budzika jest tu atrapą: ten blok jej nie uruchamia */
+    stopGuard: function () {}
   };
   vm.createContext(sandbox);
   vm.runInContext(codePlay, sandbox);

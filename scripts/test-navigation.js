@@ -2055,8 +2055,8 @@ check("nie gonimy obrazu na zywo (mpegts.js przeskakiwalby na koniec buforu)",
   src.indexOf("liveBufferLatencyMaxLatency") < 0,
   mseConfig.replace(/\n/g, " | "));
 check("4K: bufor wstecz w MSE ograniczony (domyslne 180 s to przy 4K setki MB)",
-  mseConfig.indexOf("autoCleanupMaxBackwardDuration: 45") > 0 &&
-  mseConfig.indexOf("autoCleanupMinBackwardDuration: 20") > 0);
+  mseConfig.indexOf("autoCleanupMaxBackwardDuration: 30") > 0 &&
+  mseConfig.indexOf("autoCleanupMinBackwardDuration: 15") > 0);
 check("kanal z playlisty: nieudany odcinek wraca na poczatek kolejki (dziura w TS rozsypuje obraz)",
   src.indexOf("FeederLoader.prototype._segmentFailed = function (url, reason) {") > 0 &&
   src.indexOf("this._pending.unshift(url);") > 0 &&
@@ -2353,6 +2353,28 @@ check("czytnik HLS: 4K startuje z wiekszej liczby odcinkow (z tego powstaje jego
   uhdSeg._pending[5] === "http://s/live/kanal/od10.ts",
   uhdSeg._pending.join(","));
 
+/* Kolejka odcinków jest ograniczona: gdy łącze nie wyrabia za kanałem, odcinki z
+   playlisty przychodzą szybciej, niż je oddajemy. Bez limitu obraz odjeżdżałby od
+   transmisji na zawsze, a pamięć rosła (patrz FEEDER_PENDING_MAX). */
+const capSeg = feederSeg({});
+queueSegments.call(capSeg, {
+  segments: ["b1.ts", "b2.ts", "b3.ts", "b4.ts", "b5.ts", "b6.ts",
+    "b7.ts", "b8.ts", "b9.ts", "b10.ts"],
+  endList: false
+});
+const capFirst = capSeg._pending.length;
+queueSegments.call(capSeg, {
+  segments: ["b1.ts", "b2.ts", "b3.ts", "b4.ts", "b5.ts", "b6.ts", "b7.ts", "b8.ts",
+    "b9.ts", "b10.ts", "b11.ts", "b12.ts", "b13.ts", "b14.ts"],
+  endList: false
+});
+check("czytnik HLS: kolejka odcinkow sie nie rozrasta (obraz wraca na zywo)",
+  feederBox.FEEDER_PENDING_MAX === 8 && capFirst === 6 &&
+  capSeg._pending.length === 8 &&
+  capSeg._pending[0] === "http://s/live/kanal/b7.ts" &&
+  capSeg._pending[7] === "http://s/live/kanal/b14.ts",
+  "kolejka: " + capSeg._pending.join(","));
+
 /* --- 26b. start na zapasie (nie na pierwszych kilobajtach) ----------------
    Dekoder, któremu każe się grać od razu, przez kilka sekund nadrabia to, co
    przyszło — klatka po klatce. Na 4K wygląda to dokładnie jak zrywanie obrazu,
@@ -2414,6 +2436,196 @@ check("Google TV i Chromecast rozpoznane osobno, ale aktualizacja to ta sama pac
   src.indexOf("os = \"googletv\";") > 0 &&
   src.indexOf("/^(android|androidtv|googletv|firetv)$/.test(platformInfo.os)") > 0 &&
   src.indexOf("platform_googletv: \"Google TV\"") > 0);
+
+
+/* --- 26c. kondycja obrazu na zywo: zrywy, pamiec i swiezy strumien ----------
+   Obraz 4K przez MSE rozsypuje sie po dluzszym ogladaniu: dekoder odrzuca klatki,
+   pamiec rosnie i system zamyka aplikacje. Tego nie widac ani w jednej liczbie, ani
+   z jednego zdjecia panelu — dlatego aplikacja mierzy zrywy i odrzucone klatki
+   w oknie czasu, a gdy obraz naprawde sie rozsypuje, wystawia ten sam strumien na
+   swiezym MSE. W miejscu, w ktorym dotad konczylo sie to wyjsciem z aplikacji. */
+check("kondycja obrazu: zrywy i odrzucone klatki mierzone w oknie czasu",
+  src.indexOf('var GUARD_TICK = 1000;') > 0 &&
+  src.indexOf('var GUARD_WINDOW = 90000;') > 0 &&
+  src.indexOf('var GUARD_STALLS = 8;') > 0 &&
+  src.indexOf('var GUARD_DROPPED = 1500;') > 0 &&
+  src.indexOf('video.webkitDroppedFrameCount ? video.webkitDroppedFrameCount | 0 : 0') > 0 &&
+  src.indexOf('if (state.guardStalls < GUARD_STALLS && state.guardDroppedSum < GUARD_DROPPED) return;') > 0);
+check("kondycja obrazu: zryw z <video> liczy sie do kondycji",
+  src.indexOf('function noteStall() {') > 0 &&
+  src.indexOf('if (state.watchProgram || state.engine !== "mse") return;') > 0 &&
+  src.indexOf('      noteStall();\n') > 0);
+check("kondycja obrazu: strumien startuje na swiezym MSE, a nie na kolejnym sposobie",
+  src.indexOf('function recycleStream() {') > 0 &&
+  src.indexOf('diagNote(t("diag_recycle", { n: state.guardRecycles }));') > 0 &&
+  src.indexOf('showPlayerToast(t("osd_recycle"));') > 0 &&
+  src.indexOf('clearStartWatchdog();\n    destroyEngine();\n    startSourceEntry(entry);') > 0);
+check("kondycja obrazu: odswiezamy tylko obraz na zywo przez MSE i tylko do limitu",
+  src.indexOf('var GUARD_UPTIME = 20000;') > 0 &&
+  src.indexOf('var GUARD_MAX_RECYCLES = 3;') > 0 &&
+  src.indexOf('function guardLimitReached() {') > 0 &&
+  src.indexOf('if (!state.watchChannel || state.watchProgram) return false;') > 0 &&
+  src.indexOf('if (state.engine !== "mse") return false;') > 0 &&
+  src.indexOf('return !guardLimitReached();') > 0);
+check("kondycja obrazu: gdy zrywy wracaja, panel mowi o granicy odtwarzacza",
+  src.indexOf('function guardGiveUp() {') > 0 &&
+  src.indexOf('diagNote(t("diag_recycle_stop"));') > 0 &&
+  src.indexOf('if (diagVisible()) return;\n    state.diagAutoShown = true;\n    openDiagnostics();') > 0);
+check("kondycja obrazu: budzik chodzi tylko przy obrazie na zywo przez MSE",
+  src.indexOf('if (entry.engine === "mse" && !state.watchProgram) startGuard();\n    else stopGuard();') > 0 &&
+  src.indexOf('clearInterval(state.guardTicker);\n    state.guardTicker = null;') > 0 &&
+  src.indexOf('stopGuard();\n    if (!instance) return;') > 0 &&
+  src.indexOf('stopGuard();\n    state.retryTimer = null;') > 0);
+check("kondycja obrazu: nowy kanal liczy kondycje od zera",
+  src.indexOf('state.guardRecycles = 0;\n    state.guardGaveUp = false;\n    stopGuard();') > 0);
+check("panel diagnostyki: pokazuje pamiec interfejsu, zrywy i przestrajania",
+  src.indexOf('function diagHeapMb() {') > 0 &&
+  src.indexOf('memory.usedJSHeapSize / 1048576') > 0 &&
+  src.indexOf('t("diag_health") + ": " + t("diag_heap")') > 0 &&
+  src.indexOf('t("diag_stalls") + ": " + (state.guardStalls | 0)') > 0);
+check("nowe napisy kondycji obrazu sa w obu jezykach",
+  src.indexOf('diag_health: "KONDYCJA OBRAZU"') > 0 &&
+  src.indexOf('diag_health: "PICTURE HEALTH"') > 0 &&
+  src.indexOf('diag_stalls: "zrywy"') > 0 &&
+  src.indexOf('diag_stalls: "hiccups"') > 0 &&
+  src.indexOf('osd_recycle: "Przestrajanie obrazu…"') > 0 &&
+  src.indexOf('osd_recycle: "Restarting the picture…"') > 0 &&
+  src.indexOf('diag_recycle_stop: "zrywy wracają także na świeżym strumieniu') > 0 &&
+  src.indexOf('diag_recycle_stop: "hiccups come back on a fresh stream too') > 0);
+check("czytnik playlisty: kolejka odcinkow jest ograniczona (obraz wraca na zywo)",
+  src.indexOf('var FEEDER_PENDING_MAX = 8;') > 0 &&
+  src.indexOf('var extra = this._pending.length - FEEDER_PENDING_MAX;') > 0 &&
+  src.indexOf('this._pending.splice(0, extra);') > 0 &&
+  src.indexOf('diagNote(t("diag_feeder_drop", { n: extra }));') > 0 &&
+  src.indexOf('diag_feeder_drop: "kolejka odcinków skrócona o {n}') > 0 &&
+  src.indexOf('diag_feeder_drop: "segment queue trimmed by {n}') > 0);
+
+/* Zachowanie strażnika, nie tylko jego obecność: z jednym kanałem 4K na żywo przez
+   MSE w atrapie <video>. Atrapa ma własny zegar, bo okno zrywów liczy się z czasu. */
+const guardCodeStart = src.indexOf("var GUARD_TICK = 1000;");
+const guardCodeEnd = src.indexOf("/* Czy hls.js mówi wprost", guardCodeStart);
+if (guardCodeStart < 0 || guardCodeEnd <= guardCodeStart) {
+  throw new Error("Nie znalazlem bloku kondycji obrazu w app.js");
+}
+const guardCode = src.slice(guardCodeStart, guardCodeEnd);
+["startGuard", "stopGuard", "noteStall", "guardLimitReached", "guardCanRecycle",
+  "guardTick", "recycleStream", "guardGiveUp"].forEach(function (fn) {
+  if (guardCode.indexOf("function " + fn) < 0) throw new Error("Wyciety blok kondycji nie ma " + fn);
+});
+
+function guardHarness(o) {
+  o = o || {};
+  const calls = { notes: [], toasts: [], started: [], destroyed: 0, opened: 0, intervals: 0, stopped: 0 };
+  let clock = o.nowMs === undefined ? 1700000000000 : o.nowMs;
+  let intervalFn = null;
+  const video = { webkitDroppedFrameCount: o.dropped || 0 };
+  const sandbox = {
+    state: {
+      watchChannel: o.channel === undefined ? { name: "Eleven Sports 1 4K" } : o.channel,
+      watchProgram: o.program === true,
+      engine: o.engine || "mse",
+      /* obraz gra już od minuty — nowy obraz nie jest odświeżany (GUARD_UPTIME) */
+      entryWaitStart: o.waitStart === undefined ? clock - 60000 : o.waitStart,
+      sources: [{ engine: "mse", url: "http://s/live/4k.m3u8", hls: true }],
+      sourceIndex: 0,
+      guardTicker: null,
+      guardWindowAt: clock,
+      guardStalls: 0,
+      guardDroppedBase: 0,
+      guardDroppedSum: 0,
+      guardRecycles: o.recycles | 0,
+      guardGaveUp: false,
+      diagAutoShown: false
+    },
+    t: function (key) { return "<" + key + ">"; },
+    $: function (id) { return id === "video" ? video : null; },
+    Date: { now: function () { return clock; } },
+    setInterval: function (fn) { calls.intervals++; intervalFn = fn; return 42; },
+    clearInterval: function () { calls.stopped++; },
+    diagNote: function (note) { calls.notes.push(note); },
+    showPlayerToast: function (text) { calls.toasts.push(text); },
+    clearPictureWatchdog: function () {},
+    clearStartWatchdog: function () {},
+    destroyEngine: function () { calls.destroyed++; },
+    startSourceEntry: function (entry) { calls.started.push(entry); },
+    diagVisible: function () { return o.diagVisible === true; },
+    openDiagnostics: function () { calls.opened++; }
+  };
+  run(guardCode, sandbox);
+  return {
+    api: sandbox, calls: calls, video: video,
+    setNow: function (value) { clock = value; return clock; },
+    /* jedna próbka budzika: tak, jak zrobiłby to setInterval (a gdy budzik nie
+       wstał, wołamy próbkę wprost — testy niżej zakładają go osobno) */
+    tick: function () { if (intervalFn) intervalFn(); else sandbox.guardTick(); }
+  };
+}
+
+let gh = guardHarness({});
+gh.tick();
+check("kondycja obrazu: spokojny obraz nie jest ruszany",
+  gh.calls.started.length === 0 && gh.calls.destroyed === 0 && gh.calls.opened === 0);
+
+gh = guardHarness({});
+for (let i = 0; i < 8; i++) gh.api.noteStall();
+check("kondycja obrazu: zrywy licza sie do progu", gh.api.state.guardStalls === 8);
+gh.tick();
+check("kondycja obrazu: zrywy odswiezaja TEN SAM wpis na swiezym MSE",
+  gh.calls.started.length === 1 && gh.calls.destroyed === 1 &&
+  gh.calls.started[0].hls === true && gh.calls.started[0].url === "http://s/live/4k.m3u8" &&
+  gh.api.state.guardRecycles === 1 && gh.api.state.guardStalls === 0 &&
+  gh.calls.notes.indexOf("<diag_recycle>") >= 0 && gh.calls.toasts.indexOf("<osd_recycle>") >= 0,
+  JSON.stringify({ started: gh.calls.started.length, notes: gh.calls.notes }));
+
+/* Druga droga do tego samego wniosku: dekoder odrzuca klatki, a obraz stoi. */
+gh = guardHarness({});
+gh.video.webkitDroppedFrameCount = 1600;
+gh.tick();
+check("kondycja obrazu: klatki odrzucone przez dekoder tez odswiezaja strumien",
+  gh.calls.started.length === 1 && gh.api.state.guardDroppedSum === 0);
+
+/* Świeży obraz (pierwsze sekundy wczytywania): zrywy są, ale restart nic nie da. */
+gh = guardHarness({ waitStart: 1700000000000 });
+for (let i = 0; i < 8; i++) gh.api.noteStall();
+gh.tick();
+check("kondycja obrazu: swiezego obrazu nie odswiezamy i nie straszymy panelem",
+  gh.calls.started.length === 0 && gh.calls.opened === 0 && gh.api.state.guardGaveUp === false);
+
+/* Film z archiwum i droga sprzętowa: tam nie ma czego zwalniać. */
+gh = guardHarness({ program: true });
+gh.api.noteStall();
+check("kondycja obrazu: film z archiwum nie liczy zrywow na zywo",
+  gh.api.state.guardStalls === 0);
+gh = guardHarness({ engine: "native" });
+gh.api.noteStall();
+gh.tick();
+check("kondycja obrazu: droga sprzetowa nie jest odswiezana",
+  gh.api.state.guardStalls === 0 && gh.calls.started.length === 0);
+
+/* Limit wyczerpany: dalej już nic nie restartujemy — panel pokazuje liczby. */
+gh = guardHarness({ recycles: 3 });
+for (let i = 0; i < 8; i++) gh.api.noteStall();
+gh.tick();
+check("kondycja obrazu: po limicie odswiezen panel mowi o granicy odtwarzacza",
+  gh.calls.started.length === 0 && gh.calls.opened === 1 &&
+  gh.calls.notes.indexOf("<diag_recycle_stop>") >= 0 && gh.api.state.diagAutoShown === true,
+  JSON.stringify(gh.calls.notes));
+gh.tick();
+check("kondycja obrazu: o granicy meldujemy raz, a nie co sekunde",
+  gh.calls.opened === 1 && gh.calls.notes.length === 1);
+
+/* Budzik chodzi tylko przy obrazie na żywo przez MSE — inaczej budziłby procesor
+   co sekundę bez powodu (patrz startSourceEntry). */
+gh = guardHarness({});
+gh.api.startGuard();
+check("kondycja obrazu: budzik wstaje raz i liczy okno od nowa",
+  gh.calls.intervals === 1 && gh.api.state.guardStalls === 0 && gh.api.state.guardRecycles === 0);
+gh.api.startGuard();
+check("kondycja obrazu: drugie uruchomienie nie zaklada drugiego budzika",
+  gh.calls.intervals === 1);
+gh.api.stopGuard();
+check("kondycja obrazu: zamkniecie obrazu gasi budzik",
+  gh.calls.stopped === 1 && gh.api.state.guardTicker === null);
 
 
 /* --- 26. panel diagnostyki obrazu (dzwiek gra, a obrazu nie ma) ----------
