@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.8";
+  var APP_VERSION = "2.1.9";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -200,6 +200,14 @@
     exoHeight: 0,
     exoMuted: false,
     exoPictureWaited: false,
+    /* To samo dla silnika VLC (patrz startVlcSource): obraz rysuje on, a nie
+       element <video>, więc stan obrazu trzymamy tutaj osobno. */
+    vlcPlaying: false,
+    vlcWidth: 0,
+    vlcHeight: 0,
+    vlcMuted: false,
+    vlcFirstFrame: false,
+    vlcPictureWaited: false,
     /* blokada zdarzeń przewijania listy (rysujemy jedną porcję na raz) */
     listScrollLock: false
   };
@@ -281,6 +289,15 @@
        włączeniu kanał na żywo oddaje adres odtwarzaczowi odbiornika (patrz
        startExoSource); gdy zostaje wyłączony, obraz idzie dotychczasowymi drogami. */
     nativePlayer: false,
+    /* Odtwarzacz VLC (Android, beta): domyślnie wyłączony. Po włączeniu kanał na
+       żywo oddaje adres silnikowi VLC (patrz startVlcSource) — to droga dla
+       kanałów, na których dekoder odbiornika nie wyrabia z tym strumieniem. Gdy
+       włączone są oba przełączniki, kanał dostaje VLC (patrz buildSourceQueue). */
+    vlcPlayer: false,
+    /* Droga obrazu dla VLC: przez kopiowanie klatek do kompozytora GPU
+       (TextureView) albo wprost na płaszczyźnie obrazu odbiornika. To właśnie
+       to porównujemy na telewizorze (patrz VlcEngine). */
+    vlcTexture: true,
     favorites: {},
     recentChannels: {},
     groupOrder: {}
@@ -372,6 +389,8 @@
     osd_enabled: "Mini-EPG na kanale (co teraz leci)",
     clock_enabled: "Zegar w rogu obrazu (widoczny tylko podczas oglądania)",
     native_player: "Odtwarzacz systemowy (beta) — kanał na żywo gra odtwarzaczem odbiornika, a nie przez JavaScript",
+    vlc_player: "Odtwarzacz VLC (beta) — kanał na żywo gra silnikiem VLC (jego własny demukser TS/HLS); dla kanałów, na których pozostałe drogi zawodzą",
+    vlc_texture: "VLC: obraz przez kopiowanie klatek — lekarstwo na czarny ekran (wyłączone rysuje wprost na płaszczyźnie obrazu odbiornika)",
     platform_line: "Wykryto: {name} • interfejs: {mode}",
     platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
     platform_android: "Android", platform_ios: "iOS", platform_browser: "komputer / przeglądarka",
@@ -475,12 +494,27 @@
        więc 4K nie idzie przez JavaScript i MSE (patrz startExoSource). Te napisy są
        dla niego — na innych drogach zostają nieużywane. */
     engine_exo: "odtwarzacz systemowy",
+    engine_vlc: "odtwarzacz VLC",
     diag_exo: "obraz systemowy",
     diag_exo_buffer: "prowadzi go odtwarzacz systemowy",
     diag_exo_start: "oddaję kanał odtwarzaczowi systemowemu",
     diag_native_player: "odtwarzacz systemowy (ExoPlayer)",
     diag_exo_frames: "klatki na obrazie",
     diag_exo_dropped: "zgubione klatki",
+    /* Wiersz silnika VLC (przełącznik „Odtwarzacz VLC (beta)”) — pokazuje to, co
+       odróżnia „strumień nie nadchodzi” od „dekoder nie wyrabia”: klatki, które
+       doszły na obraz, te które wypadły, uszkodzone dane i bitrate strumienia. */
+    diag_vlc: "obraz VLC",
+    diag_vlc_buffer: "prowadzi go silnik VLC",
+    diag_vlc_start: "oddaję kanał silnikowi VLC",
+    diag_vlc_native: "odtwarzacz VLC (libVLC)",
+    diag_vlc_frames: "klatki na obrazie",
+    diag_vlc_lost: "zgubione klatki",
+    diag_vlc_displayed: "odtworzone klatki",
+    diag_vlc_corrupted: "uszkodzone dane strumienia",
+    diag_vlc_bitrate: "strumień",
+    diag_vlc_copy: "obraz przez kopiowanie klatek",
+    diag_vlc_direct: "obraz wprost na płaszczyźnie obrazu",
     epg_none: "Brak danych EPG dla tego kanału.",
     archive_day_today: "Dziś", archive_day_yesterday: "Wczoraj", archive_day_before: "Przedwczoraj",
     archive_limited: "pokazano {shown} z {total}",
@@ -653,6 +687,8 @@
     osd_enabled: "Mini-EPG on channel (what's on now)",
     clock_enabled: "Clock in the corner (visible only while watching)",
     native_player: "System player (beta) — a live channel plays on the device player, not through JavaScript",
+    vlc_player: "VLC player (beta) — a live channel plays on the VLC engine (its own TS/HLS demuxer); for channels the other paths give up on",
+    vlc_texture: "VLC: picture through frame copy — the cure for a black screen (off draws straight onto the device picture plane)",
     platform_line: "Detected: {name} • interface: {mode}",
     platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
     platform_android: "Android", platform_ios: "iOS", platform_browser: "desktop / browser",
@@ -754,12 +790,24 @@
        A live channel goes to the device's own player: it demuxes TS and HLS in
        hardware, so 4K does not travel through JavaScript and MSE (see startExoSource). */
     engine_exo: "system player",
+    engine_vlc: "VLC player",
     diag_exo: "system picture",
     diag_exo_buffer: "the system player keeps it",
     diag_exo_start: "handing the channel to the system player",
     diag_native_player: "system player (ExoPlayer)",
     diag_exo_frames: "frames on screen",
     diag_exo_dropped: "dropped frames",
+    diag_vlc: "VLC picture",
+    diag_vlc_buffer: "the VLC engine keeps it",
+    diag_vlc_start: "handing the channel to the VLC engine",
+    diag_vlc_native: "VLC player (libVLC)",
+    diag_vlc_frames: "frames on screen",
+    diag_vlc_lost: "dropped frames",
+    diag_vlc_displayed: "displayed frames",
+    diag_vlc_corrupted: "corrupted stream data",
+    diag_vlc_bitrate: "stream",
+    diag_vlc_copy: "picture through frame copy",
+    diag_vlc_direct: "picture straight onto the picture plane",
     diag_encrypted: "encrypted (EXT-X-KEY)", diag_variants: "variants",
     epg_none: "No EPG data for this channel.",
     archive_day_today: "Today", archive_day_yesterday: "Yesterday", archive_day_before: "2 days ago",
@@ -1461,6 +1509,8 @@
     $("osdEnabled").checked = settings.osdEnabled !== false;
     $("clockEnabled").checked = settings.clockEnabled === true;
     $("nativePlayer").checked = settings.nativePlayer === true;
+    $("vlcPlayer").checked = settings.vlcPlayer === true;
+    $("vlcTexture").checked = settings.vlcTexture !== false;
     $("settingsError").textContent = "";
     resetUpdateStatus();
     /* „Wstecz” w ustawieniach wychodzi bez zapisu — przy pierwszym uruchomieniu
@@ -3687,6 +3737,7 @@
      jakby aplikacja wczytywała kanał na żywo zamiast nagrania. */
   function engineName(engine) {
     if (engine === "exo") return t("engine_exo");
+    if (engine === "vlc") return t("engine_vlc");
     if (engine === "mse") return t("engine_mse");
     if (engine === "hls") return t("engine_hls");
     return t("engine_native");
@@ -3694,6 +3745,7 @@
 
   function engineLabel(engine) {
     if (engine === "exo") return t("engine_exo");
+    if (engine === "vlc") return t("engine_vlc");
     if (engine === "mse") return t("engine_mse");
     if (engine === "hls") return t("engine_hls");
     return t("live");
@@ -3896,6 +3948,22 @@
         (native.firstFrame ? t("diag_yes") : t("diag_no")) +
         " · " + t("diag_exo_dropped") + ": " + (native.dropped | 0));
     }
+    /* Silnik VLC: te same pytania, co droga systemowa, plus to, czego tam nie ma —
+       ile klatek odtworzono, ile danych strumienia było uszkodzonych i jaki jest
+       realny bitrate kanału (patrz VlcEngine → infoJson). */
+    var vlc = vlcInfo();
+    if (vlc) {
+      lines.push(" " + t("diag_vlc_native") + " " + String(vlc.libvlc) +
+        " · API " + (vlc.api | 0) +
+        " · " + (vlc.texture ? t("diag_vlc_copy") : t("diag_vlc_direct")) +
+        (vlc.decoder ? " · " + String(vlc.decoder) : "") +
+        " · " + t("diag_vlc_frames") + ": " +
+        (vlc.firstFrame ? t("diag_yes") : t("diag_no")) +
+        " · " + t("diag_vlc_lost") + ": " + (vlc.lost | 0) +
+        " · " + t("diag_vlc_displayed") + ": " + (vlc.displayed | 0) +
+        " · " + t("diag_vlc_corrupted") + ": " + (vlc.corrupted | 0) +
+        " · " + t("diag_vlc_bitrate") + ": " + vlcBitrate(vlc.bitrate));
+    }
     return lines;
   }
 
@@ -3926,6 +3994,16 @@
         " · " + t("diag_size") + ": " + (state.exoWidth | 0) + "×" + (state.exoHeight | 0) +
         " · " + t("diag_muted") + ": " + (state.exoMuted ? t("diag_yes") : t("diag_no")) +
         " · " + t("diag_buffer") + ": " + t("diag_exo_buffer"));
+      lines.push(" " + maskUrl(state.currentSource || ""));
+      return lines;
+    }
+    /* Obraz rysowany przez VLC też nie jest w elemencie <video>, więc jego stan
+       przychodzi z mostu (patrz vlcEvent). */
+    if (vlcActive()) {
+      lines.push(" " + t("diag_vlc") + ": " + (state.vlcPlaying ? t("diag_playing") : t("diag_paused")) +
+        " · " + t("diag_size") + ": " + (state.vlcWidth | 0) + "×" + (state.vlcHeight | 0) +
+        " · " + t("diag_muted") + ": " + (state.vlcMuted ? t("diag_yes") : t("diag_no")) +
+        " · " + t("diag_buffer") + ": " + t("diag_vlc_buffer"));
       lines.push(" " + maskUrl(state.currentSource || ""));
       return lines;
     }
@@ -5189,6 +5267,43 @@
     try { bridge.setNativeMuted(muted === true); } catch (error) { /* most milczy */ }
   }
 
+  /* ---- wspólne dla obu silników odbiornika (ExoPlayer i VLC) ----
+
+     Pasek odtwarzacza, pauza i wyciszenie pytają o obraz, którego nie ma
+     w elemencie <video> — obojętnie, który silnik go rysuje (patrz state.exoPlaying
+     i state.vlcPlaying). Dzięki temu reszta kodu pyta o jedno, a nie o dwa. */
+  function nativeLayerActive() {
+    return exoActive() || vlcActive();
+  }
+
+  function nativePlaying() {
+    return vlcActive() ? !!state.vlcPlaying : !!state.exoPlaying;
+  }
+
+  function nativeSetPlaying(playing) {
+    if (vlcActive()) {
+      state.vlcPlaying = playing !== false;
+      vlcPlay(playing);
+      return;
+    }
+    state.exoPlaying = playing !== false;
+    exoPlay(playing);
+  }
+
+  function nativeMuted() {
+    return vlcActive() ? !!state.vlcMuted : !!state.exoMuted;
+  }
+
+  function nativeSetMuted(muted) {
+    if (vlcActive()) {
+      state.vlcMuted = muted === true;
+      vlcVolume(state.vlcMuted);
+      return;
+    }
+    state.exoMuted = muted === true;
+    exoVolume(state.exoMuted);
+  }
+
   function startExoSource(entry) {
     var bridge = exoBridge();
     var token = nextEngineToken();
@@ -5301,6 +5416,185 @@
     }, delay || EXO_START_WAIT);
   }
 
+  /* ==============  ODTWARZACZ VLC (Android: libVLC)  ==============
+
+     Trzecia droga obrazu (patrz VlcEngine w projekcie Androida): ten sam pomysł,
+     co odtwarzacz systemowy, ale inny silnik — libVLC ma własny demukser TS/HLS
+     i oddaje obraz przez TextureView, czyli tą samą drogą, którą idą klatki
+     pozostałych odtwarzaczy. Włączany jest ręcznie („Odtwarzacz VLC (beta)”)
+     i tylko dla kanału NA ŻYWO, żeby droga testowa nie mogła zaszkodzić temu, co
+     działa; gdy nie da obrazu, kolejka prób idzie dalej jak dotąd. */
+
+  var VLC_START_WAIT = 9000;         /* ile czekamy, aż obraz VLC ruszy */
+  var VLC_PICTURE_WAIT = 6000;       /* dźwięk gra, a klatek nie ma */
+
+  /* Most do silnika VLC: jest tylko w aplikacji na Androidzie i tylko wtedy, gdy
+     w paczce są biblioteki dla architektury tego odbiornika (patrz VlcEngine). */
+  function vlcBridge() {
+    try {
+      if (!platformInfo.native) return null;
+      var bridge = window.OpenIptvNative;
+      if (!bridge || typeof bridge.playVlc !== "function") return null;
+      return bridge;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /* Co silnik VLC widzi w strumieniu — panel diagnostyki pokazuje to obok drogi
+     systemowej (patrz diagCodecLines). Bez mostu nie ma czego pokazywać. */
+  function vlcInfo() {
+    var bridge = vlcBridge();
+    if (!bridge || typeof bridge.vlcInfo !== "function") return null;
+    try {
+      var info = JSON.parse(String(bridge.vlcInfo() || ""));
+      return info && info.libvlc ? info : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /* Bitrate z VLC (demuxBitrate) jest w kb/s — pokazujemy go w Mb/s, bo tak mówi
+     się o kanałach. Brak liczby to „brak”, a nie zero: silnik, który jeszcze nic
+     nie odebrał, nie ma czego pokazać (patrz readStats w VlcEngine). */
+  function vlcBitrate(kbps) {
+    var value = kbps | 0;
+    if (value <= 0) return t("diag_none");
+    return (Math.round(value / 100) / 10) + " Mb/s";
+  }
+
+  /* Czy obraz w tej próbie rysuje VLC (a nie element <video>). */
+  function vlcActive() {
+    return state.engine === "vlc";
+  }
+
+  /* Pauza, wznowienie i wyciszenie obrazu VLC — most przyjmuje sam stan. */
+  function vlcPlay(playing) {
+    var bridge = vlcBridge();
+    if (!bridge || typeof bridge.setVlcPlaying !== "function") return;
+    try { bridge.setVlcPlaying(playing !== false); } catch (error) { /* most milczy */ }
+  }
+
+  function vlcVolume(muted) {
+    var bridge = vlcBridge();
+    if (!bridge || typeof bridge.setVlcMuted !== "function") return;
+    try { bridge.setVlcMuted(muted === true); } catch (error) { /* most milczy */ }
+  }
+
+  /* Start kanału silnikiem VLC. Adres idzie do mostu razem z identyfikatorem
+     przeglądarki (dostawcy potrafią po nim filtrować dostęp do kanału) i z drogą
+     obrazu z ustawień — tym, co na telewizorze porównujemy. */
+  function startVlcSource(entry) {
+    var bridge = vlcBridge();
+    var token = nextEngineToken();
+    state.engine = "vlc";
+    state.engineLoading = true;
+    state.vlcPlaying = false;
+    state.vlcWidth = 0;
+    state.vlcHeight = 0;
+    state.vlcFirstFrame = false;
+    state.vlcPictureWaited = false;
+    state.engineInstance = {
+      kind: "vlc",
+      close: function () { stopVlc(); }
+    };
+    if (!bridge) {
+      /* Most zniknął w trakcie (albo go tu nie ma) — kolejka idzie dalej. */
+      handlePlaybackError(t("err_stream") + " (" + engineName("vlc") + ")");
+      return;
+    }
+    clearVideoQuietly();
+    markExoMode(true);
+    var result = "";
+    try {
+      result = String(bridge.playVlc(entry.url, navigator.userAgent || "", settings.vlcTexture !== false));
+    } catch (error) {
+      result = "error: " + error.message;
+    }
+    if (result !== "ok") {
+      handlePlaybackError(t("err_stream") + " (" + engineName("vlc") + ": " + result + ")");
+      return;
+    }
+    /* Wyciszenie jest stanem tej sesji — nowy obraz musi je dostać od razu. */
+    if (state.vlcMuted) vlcVolume(true);
+    diagNote(t("diag_vlc_start"));
+    armVlcWatchdog(token, VLC_START_WAIT);
+  }
+
+  /* Zamknięcie obrazu VLC: most gasi silnik, a strona wraca do zwykłego wyglądu
+     (patrz destroyEngine → engineInstance.close). */
+  function stopVlc() {
+    var bridge = vlcBridge();
+    if (bridge && typeof bridge.stopVlc === "function") {
+      try { bridge.stopVlc(); } catch (error) { /* most już nie odpowiada */ }
+    }
+    markExoMode(false);
+    state.vlcPlaying = false;
+  }
+
+  /* Zdarzenia z silnika VLC (VlcEngine → emitVlc). Trzymają ten sam stan, co
+     zdarzenia <video> i drogi systemowej: bez tego pasek, budziki i panel
+     diagnostyki nie wiedziałyby, że obraz naprawdę leci. */
+  function vlcEvent(event) {
+    if (!vlcActive() || !state.watchChannel) return;
+    var type = event && event.type;
+    if (type === "size") {
+      state.vlcWidth = event.width | 0;
+      state.vlcHeight = event.height | 0;
+      /* klatka doszła na obraz — dokładnie to, czego brakuje przy samym dźwięku */
+      if (state.vlcWidth > 0) state.vlcFirstFrame = true;
+      noteStreamActivity();
+      return;
+    }
+    if (type === "playing") {
+      state.engineLoading = false;
+      state.vlcPlaying = true;
+      clearStartWatchdog();
+      noteStreamActivity();
+      var error = $("playerError");
+      if (error) error.classList.add("hidden");
+      /* od tego momentu liczy się czas oglądania dla „Ostatnio oglądane” */
+      state.watchStart = state.watchStart || Date.now();
+      scheduleRecentRecord();
+      updateOsd();
+      scheduleOsdHide();
+      return;
+    }
+    if (type === "paused") {
+      state.vlcPlaying = false;
+      updateOsd();
+      return;
+    }
+    if (type === "buffering" || type === "ended" || type === "stopped") return;
+    if (type === "error") {
+      handlePlaybackError(t("err_stream") + " (" + engineName("vlc") +
+        (event.message ? ": " + String(event.message).slice(0, 120) : "") + ")");
+    }
+  }
+  window.__openiptvVlcEvent = vlcEvent;
+
+  /* Budzik drogi VLC: brak obrazu musi oddać kanał kolejce, a nie zostawić czarny
+     ekran. Pytamy o to samo, co przy odtwarzaczu systemowym: czy cokolwiek ruszyło
+     i czy razem z dźwiękiem doszła jakakolwiek klatka (patrz armExoWatchdog). */
+  function armVlcWatchdog(token, delay) {
+    clearStartWatchdog();
+    state.startTimer = setTimeout(function () {
+      state.startTimer = null;
+      if (!state.watchChannel || state.engineToken !== token || !vlcActive()) return;
+      if (!state.vlcPlaying) {
+        handlePlaybackError(t("err_stream") + " (" + engineName("vlc") + ")");
+        return;
+      }
+      if (state.vlcFirstFrame || state.vlcWidth > 0) return;
+      if (!state.vlcPictureWaited) {
+        state.vlcPictureWaited = true;
+        armVlcWatchdog(token, VLC_PICTURE_WAIT);
+        return;
+      }
+      handlePlaybackError(t("err_stream") + " (" + engineName("vlc") + ": " + t("err_no_picture") + ")");
+    }, delay || VLC_START_WAIT);
+  }
+
   /* Kolejka prób dla kanału. Na Androidzie pierwszy jest odtwarzacz systemowy
      (patrz startExoSource), potem odtwarzacz sprzętowy strony, a na końcu MSE i HLS. */
   function buildSourceQueue(primaryUrl) {
@@ -5309,6 +5603,13 @@
        użytkownik go włączył (Ustawienia → „Odtwarzacz systemowy (beta)”): archiwum
        ma skończone okno i wymaga przewijania, a droga systemowa jest wciąż
        testowana. Gdy mostu nie ma (webOS, przeglądarka), wpisu nie ma wcale. */
+    /* Silnik VLC bierzemy tak samo, jak odtwarzacz systemowy: kanał NA ŻYWO,
+       włączony ręcznie w ustawieniach i tylko tam, gdzie most istnieje. Gdy
+       włączone są oba przełączniki, kanał dostaje VLC — to on jest drogą dla
+       strumieni, na których dekoder odbiornika nie wyrabia. */
+    if (settings.vlcPlayer === true && vlcBridge() && !state.watchProgram) {
+      queue.push({ engine: "vlc", url: primaryUrl });
+    }
     if (settings.nativePlayer === true && exoBridge() && !state.watchProgram) {
       queue.push({ engine: "exo", url: primaryUrl });
     }
@@ -5359,7 +5660,10 @@
     /* Odtwarzacz systemowy zostaje na czele kolejki: to droga sprzętowa, więc
        zapamiętany silnik nie ma po co jej omijać — a gdy nie da obrazu, kolejka idzie
        dalej jak dotąd (patrz buildSourceQueue). */
-    if (queue[0] && queue[0].engine === "exo") return queue;
+    /* Odtwarzacz systemowy albo VLC zostaje na czele kolejki: to drogi sprzętowe,
+       więc zapamiętany silnik nie ma po co ich omijać — a gdy nie dadażą obrazu,
+       kolejka idzie dalej jak dotąd (patrz buildSourceQueue). */
+    if (queue[0] && (queue[0].engine === "exo" || queue[0].engine === "vlc")) return queue;
     for (var i = 1; i < queue.length; i++) {
       /* Czytnik playlisty (wpis z „hls: true”) zostaje na końcu kolejki. Z
          nazwy wygląda jak zwykłe MSE, więc zapamiętany MSE wybierał właśnie
@@ -5402,7 +5706,8 @@
        ona ma własny bufor i własną pamięć do zwolnienia (patrz guardTick). */
     if (entry.engine === "mse" && !state.watchProgram) startGuard();
     else stopGuard();
-    if (entry.engine === "exo") startExoSource(entry);
+    if (entry.engine === "vlc") startVlcSource(entry);
+    else if (entry.engine === "exo") startExoSource(entry);
     else if (entry.engine === "mse") startMseSource(entry);
     else if (entry.engine === "hls") startHlsSource(entry);
     else playSource(entry.url);
@@ -5413,7 +5718,7 @@
        jej obrazu nie ma w elemencie <video>, więc te budziki widziałyby tylko
        czarny ekran i ucięłyby kanał w połowie wczytywania. */
     var token = state.engineToken;
-    if (entry.engine !== "exo") {
+    if (entry.engine !== "exo" && entry.engine !== "vlc") {
       armStartWatchdog(token);
       armPictureWatchdog(token);
     }
@@ -5502,10 +5807,13 @@
   /* Rozdzielczość znamy od „loadedmetadata” — wymiary klatki to jedyny ślad,
      że to naprawdę 4K (ustawienia strumienia w playliście bywają nieprawdziwe). */
   function videoIsUhd() {
-    /* obraz systemowy nie ma elementu <video> — rozdzielczość klatki przychodzi
-       z mostu (patrz exoEvent) */
+    /* obraz systemowy i VLC nie mają elementu <video> — rozdzielczość klatki
+       przychodzi z mostu (patrz exoEvent i vlcEvent) */
     if (state.engine === "exo") {
       return (state.exoHeight | 0) >= 1440 || (state.exoWidth | 0) >= 2560;
+    }
+    if (state.engine === "vlc") {
+      return (state.vlcHeight | 0) >= 1440 || (state.vlcWidth | 0) >= 2560;
     }
     var video = $("video");
     if (!video) return false;
@@ -5933,12 +6241,18 @@
     state.guardRecycles = 0;
     state.guardGaveUp = false;
     stopGuard();
-    /* obraz systemowy też liczy się od zera: stan z poprzedniego kanału (czy leciał,
-       jaką miał klatkę) nie może opisywać nowego (patrz startExoSource) */
+    /* obraz systemowy i VLC też liczą się od zera: stan z poprzedniego kanału (czy
+       leciał, jaką miał klatkę) nie może opisywać nowego (patrz startExoSource
+       i startVlcSource) */
     state.exoPlaying = false;
     state.exoWidth = 0;
     state.exoHeight = 0;
     state.exoPictureWaited = false;
+    state.vlcPlaying = false;
+    state.vlcWidth = 0;
+    state.vlcHeight = 0;
+    state.vlcFirstFrame = false;
+    state.vlcPictureWaited = false;
     markExoMode(false);
     /* nazwa kanału mówi wprost, że to 4K — rozpoznajemy to przed startem
        odtwarzania, żeby wymuszona warstwa obrazu nie zdążyła wejść kanałowi
@@ -6041,8 +6355,9 @@
     clearInterval(state.osdTicker);
     /* obraz zamknięty — nie ma już czego pilnować (patrz guardTick) */
     stopGuard();
-    /* obraz systemowy gaśnie razem z kanałem, a strona wraca do zwykłego wyglądu */
+    /* obraz systemowy i VLC gasną razem z kanałem, a strona wraca do zwykłego wyglądu */
     stopExo();
+    stopVlc();
     state.retryTimer = null;
     state.stableTimer = null;
     state.recentTimer = null;
@@ -7502,8 +7817,8 @@
 
   /* ⏵‖ (przycisk na pasku i klawisz play/pauza na pilocie). */
   function togglePlayPause() {
-    if (exoActive()) {
-      if (state.exoPlaying) pausePlayback();
+    if (nativeLayerActive()) {
+      if (nativePlaying()) pausePlayback();
       else resumePlayback();
       return;
     }
@@ -7516,10 +7831,9 @@
   /* Pauza na kanale na żywo zapamiętuje chwilę zatrzymania — obraz leci dalej,
      więc wznowienie musi wrócić dokładnie tam (patrz resumePlayback). */
   function pausePlayback() {
-    if (exoActive()) {
+    if (nativeLayerActive()) {
       if (!state.isArchive && state.watchChannel) state.livePauseAt = Date.now();
-      state.exoPlaying = false;
-      exoPlay(false);
+      nativeSetPlaying(false);
       showOsd();
       updateOsd();
       return;
@@ -7553,10 +7867,9 @@
       return;
     }
 
-    /* obraz systemowy wznawia się przez most — elementu <video> w nim nie ma */
-    if (exoActive()) {
-      state.exoPlaying = true;
-      exoPlay(true);
+    /* obraz systemowy i VLC wznawiają się przez most — elementu <video> tam nie ma */
+    if (nativeLayerActive()) {
+      nativeSetPlaying(true);
       updateOsd();
       scheduleOsdHide();
       return;
@@ -7573,9 +7886,8 @@
   /* 🔇 na pilocie (i przycisk na pasku): wyciszenie dźwięku strumienia.
      Głośność samego telewizora należy do sprzętu — tu wyciszamy odtwarzacz. */
   function toggleMute() {
-    if (exoActive()) {
-      state.exoMuted = !state.exoMuted;
-      exoVolume(state.exoMuted);
+    if (nativeLayerActive()) {
+      nativeSetMuted(!nativeMuted());
       showOsd();
       updateOsd();
       return;
@@ -7588,7 +7900,7 @@
   }
 
   function isMuted() {
-    if (exoActive()) return !!state.exoMuted;
+    if (nativeLayerActive()) return nativeMuted();
     var video = $("video");
     return !!(video && video.muted);
   }
@@ -7699,7 +8011,7 @@
       }
       if (timeEl) {
         timeEl.textContent = engineLabel(state.engine) +
-          (video && video.paused && !exoActive() ? " • " + t("osd_paused") : "") +
+          (video && video.paused && !nativeLayerActive() ? " • " + t("osd_paused") : "") +
           (isMuted() ? " • " + t("osd_muted") : "");
       }
       if (hintEl) hintEl.textContent = t("osd_hint_live");
@@ -7710,9 +8022,9 @@
 
     var bar = $("playerActions");
     var playButton = bar ? bar.querySelector('[data-osd="play"]') : null;
-    /* Obraz systemowy nie ma elementu <video> — czy jest zatrzymany, mówi most
-       (patrz state.exoPlaying), a nie video.paused. */
-    var paused = exoActive() ? !state.exoPlaying : !!(video && video.paused);
+    /* Obraz systemowy i VLC nie mają elementu <video> — czy obraz jest zatrzymany,
+       mówi most (patrz state.exoPlaying / state.vlcPlaying), a nie video.paused. */
+    var paused = nativeLayerActive() ? !nativePlaying() : !!(video && video.paused);
     if (playButton) setIconLabel(playButton, t(paused ? "osd_play" : "osd_pause"));
     var muteButton = bar ? bar.querySelector('[data-osd="mute"]') : null;
     if (muteButton) setIconLabel(muteButton, muteLabel());
@@ -8490,6 +8802,8 @@
     settings.osdEnabled = $("osdEnabled").checked;
     settings.clockEnabled = $("clockEnabled").checked;
     settings.nativePlayer = $("nativePlayer").checked;
+    settings.vlcPlayer = $("vlcPlayer").checked;
+    settings.vlcTexture = $("vlcTexture").checked;
 
     /* Wielkie teksty (playlista/EPG wybrane z pliku) trzymamy w osobnym kluczu,
        a w głównym zapisujemy tylko lekkie ustawienia — w przeciwnym razie zapis
@@ -8581,6 +8895,18 @@
      kanału (kolejka prób buduje się na nowo przy każdym wejściu w obraz). */
   $("nativePlayer").onchange = function () {
     settings.nativePlayer = this.checked;
+  };
+
+  /* Silnik VLC jest beta tak samo: włącza się go ręcznie, a droga działa od
+     następnego kanału (kolejka prób buduje się przy każdym wejściu w obraz). */
+  $("vlcPlayer").onchange = function () {
+    settings.vlcPlayer = this.checked;
+  };
+
+  /* Droga obrazu VLC działa od następnego kanału: silnik powstaje od nowa
+     z nowymi opcjami (patrz VlcEngine -> ensureLib). */
+  $("vlcTexture").onchange = function () {
+    settings.vlcTexture = this.checked;
   };
 
   /* aktualizacja: sprawdzenie wydania na GitHubie i — na Androidzie / Fire TV —

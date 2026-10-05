@@ -114,6 +114,8 @@ function harness(o) {
 function ctrlHarness(o) {
   o = o || {};
   const calls = { play: [], played: 0, paused: 0, osd: 0, exoPlayed: [], exoMuted: null };
+  /* stan obrazu rysowanego przez silnik odbiornika — trzyma go most, a nie <video> */
+  const engineState = { playing: o.enginePlaying !== false, muted: false };
   const video = {
     paused: !!o.paused,
     muted: !!o.muted,
@@ -138,9 +140,22 @@ function ctrlHarness(o) {
     showOsd: function () { calls.osd++; },
     updateOsd: function () {},
     scheduleOsdHide: function () {},
-    /* Odtwarzacz systemowy (patrz startExoSource): w atrapie włącza go opcja „exo”.
-       Jego obrazu nie ma w elemencie <video>, więc pauza i wyciszenie idą mostem. */
+    /* Odtwarzacz odbiornika (ExoPlayer albo VLC — patrz nativeLayerActive): w atrapie
+       włącza go opcja „exo”. Jego obrazu nie ma w elemencie <video>, więc pauza
+       i wyciszenie idą mostem, a pyta o to wspólna warstwa obu silników. */
     exoActive: function () { return o.exo === true; },
+    vlcActive: function () { return o.vlc === true; },
+    nativeLayerActive: function () { return o.exo === true || o.vlc === true; },
+    nativePlaying: function () { return engineState.playing; },
+    nativeSetPlaying: function (playing) {
+      engineState.playing = playing !== false;
+      calls.exoPlayed.push(playing);
+    },
+    nativeMuted: function () { return engineState.muted; },
+    nativeSetMuted: function (muted) {
+      engineState.muted = muted === true;
+      calls.exoMuted = muted;
+    },
     exoPlay: function (playing) { calls.exoPlayed.push(playing); },
     exoVolume: function (muted) { calls.exoMuted = muted; },
     t: function (k) { return k; },
@@ -209,7 +224,9 @@ function playHarness(o) {
        więc zatrzymanie budzika jest tu atrapą: ten blok jej nie uruchamia */
     stopGuard: function () {},
     /* klasa przezroczystości strony dla obrazu systemowego (patrz markExoMode) */
-    markExoMode: function () {}
+    markExoMode: function () {},
+    /* silnik VLC gasi się razem z odtwarzaczem systemowym (patrz closePlayer) */
+    stopVlc: function () {}
   };
   vm.createContext(sandbox);
   vm.runInContext(codePlay, sandbox);

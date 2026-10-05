@@ -16,4 +16,15 @@ ext {
     /* Wersja odtwarzacza systemowego (ExoPlayer). 1.4.1 to ostatnia wersja
        budowana pod compileSdk 34 — nowsze wymagają 35. */
     media3Version = '1.4.1'
+    /* Silnik VLC (libVLC) dla przełącznika „Odtwarzacz VLC (beta)”: kanał gra
+       wtedy jego własnym demukserem TS/HLS i własną drogą do dekodera sprzętowego
+       (patrz VlcEngine.java). 3.6.5 to ostatnie wydanie, które da się zbudować
+       w tym projekcie: 3.7.x żąda w metadanych paczki compileSdk 36, a projekt
+       ma 34 (na 34 stoi też media3 1.4.1) — podniesienie compileSdk to wymiana
+       całego łańcucha narzędzi, a nie zmiana jednej liczby. */
+    libvlcVersion = '3.6.5'
+    /* ABI, dla których pakujemy silnik VLC. Telewizory (Fire TV, Android TV) to
+       ARM — 64-bit i 32-bit — a każda architektura to kilkadziesiąt megabajtów
+       bibliotek, więc x86 (emulatory) zostaje poza paczką. */
+    libvlcAbiFilters = ['arm64-v8a', 'armeabi-v7a']
 }

@@ -67,6 +67,9 @@ public class MainActivity extends BridgeActivity {
        wątku, więc nie wolno w nim dotykać odtwarzacza. */
     private volatile String nativeState = "{\"type\":\"idle\"}";
 
+    /* ---- odtwarzacz VLC (patrz VlcEngine) ---- */
+    private VlcEngine vlcEngine;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         /* Lokalne pluginy (aktualizacja APK z GitHuba, wybor pliku M3U / EPG bez
@@ -79,6 +82,7 @@ public class MainActivity extends BridgeActivity {
         applyTvViewport();
         bindExitBridge();
         initNativePlayer();
+        initVlcEngine();
     }
 
     /* Fire TV i Android TV zgłaszają ekran o gęstości 2.0, czyli okno 960x540 px
@@ -207,6 +211,67 @@ public class MainActivity extends BridgeActivity {
                         int dropped = nativeDroppedSeen - nativeDroppedBase;
                         info.put("dropped", dropped > 0 ? dropped : 0);
                         return info.toString();
+                    } catch (Exception error) {
+                        return "";
+                    }
+                }
+
+                /* ---- odtwarzacz VLC (przełącznik „Odtwarzacz VLC (beta)”) ----
+                   Te same zadania co droga systemowa, tylko innym silnikiem
+                   (patrz VlcEngine): app.js obsługuje obie drogi jednym kodem. */
+
+                @JavascriptInterface
+                public String playVlc(final String url, final String userAgent, final boolean textureView) {
+                    if (url == null || url.isEmpty()) return "error: brak adresu";
+                    /* Biblioteki VLC pakujemy tylko dla architektur telewizorów
+                       (patrz libvlcAbiFilters) — na innym odbiorniku most nie ma
+                       czego wołać i kanał idzie dotychczasowymi drogami. */
+                    if (vlcEngine == null || !VlcEngine.available()) return "error: brak silnika";
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (vlcEngine != null) vlcEngine.start(url, userAgent, textureView);
+                        }
+                    });
+                    return "ok";
+                }
+
+                @JavascriptInterface
+                public void stopVlc() {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (vlcEngine != null) vlcEngine.stop();
+                        }
+                    });
+                }
+
+                @JavascriptInterface
+                public void setVlcPlaying(final boolean playing) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (vlcEngine != null) vlcEngine.setPlaying(playing);
+                        }
+                    });
+                }
+
+                @JavascriptInterface
+                public void setVlcMuted(final boolean muted) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (vlcEngine != null) vlcEngine.setMuted(muted);
+                        }
+                    });
+                }
+
+                /* Co VLC widzi w strumieniu — panel diagnostyki pokazuje to obok
+                   drogi systemowej (patrz diagCodecLines w app.js). */
+                @JavascriptInterface
+                public String vlcInfo() {
+                    try {
+                        return vlcEngine != null ? vlcEngine.infoJson() : "";
                     } catch (Exception error) {
                         return "";
                     }
@@ -552,6 +617,49 @@ public class MainActivity extends BridgeActivity {
         });
     }
 
+    /* ======================  ODTWARZACZ VLC (libVLC)  ======================
+
+       Trzecia droga obrazu (patrz VlcEngine): kanał na żywo może iść silnikiem
+       VLC, gdy dekoder odbiornika nie wyrabia z tym strumieniem. Włączana jest
+       ręcznie w ustawieniach i tylko dla kanału na żywo — tak samo jak droga
+       systemowa, bo obie są testowe (patrz buildSourceQueue w app.js). Most jest
+       ten sam (OpenIptvNative): playVlc(), stopVlc(), setVlcPlaying(),
+       setVlcMuted(), vlcInfo(), a zdarzenia wracają do strony przez
+       window.__openiptvVlcEvent. */
+
+    private void initVlcEngine() {
+        try {
+            vlcEngine = new VlcEngine(this, new VlcEngine.Listener() {
+                @Override
+                public void onEvent(String json) {
+                    emitVlc(json);
+                }
+            });
+        } catch (Throwable error) {
+            /* brak silnika VLC (np. paczka bez bibliotek dla tej architektury)
+               nie może blokować aplikacji — kanał pójdzie dotychczasowymi drogami */
+            vlcEngine = null;
+        }
+    }
+
+    /* Zdarzenie obrazu VLC dla strony — ta sama postać, co emitNative wyżej. */
+    private void emitVlc(final String json) {
+        final WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+        if (webView == null) return;
+        final String payload = json == null ? "{\"type\":\"error\"}" : json;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    webView.evaluateJavascript(
+                        "window.__openiptvVlcEvent&&window.__openiptvVlcEvent(" + payload + ")",
+                        null);
+                } catch (Exception ignored) {
+                }
+            }
+        });
+    }
+
     /* Czy ten odbiornik ma sprzętowy dekoder HEVC — bez niego kanał 4K nie ruszy
        żadną drogą, a panel diagnostyki mówi to wprost (patrz diagCodecLines). */
     private boolean hasHevcDecoder() {
@@ -580,6 +688,10 @@ public class MainActivity extends BridgeActivity {
             if (player != null) player.setPlayWhenReady(false);
         } catch (Exception ignored) {
         }
+        try {
+            if (vlcEngine != null) vlcEngine.setPlaying(false);
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
@@ -588,6 +700,13 @@ public class MainActivity extends BridgeActivity {
             if (player != null) {
                 player.release();
                 player = null;
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            if (vlcEngine != null) {
+                vlcEngine.release();
+                vlcEngine = null;
             }
         } catch (Exception ignored) {
         }

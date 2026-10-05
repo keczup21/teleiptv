@@ -11,9 +11,17 @@ android {
         applicationId "pl.openiptv.player"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 51
-        versionName "2.1.8"
+        versionCode 52
+        versionName "2.1.9"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        /* Silnik VLC (libVLC) wchodzi do paczki tylko dla architektur telewizorów
+           — patrz libvlcAbiFilters w variables.gradle. Bez tego filtra paczka
+           rosłaby o biblioteki dla emulatorów (x86). */
+        ndk {
+            for (abi in rootProject.ext.libvlcAbiFilters) {
+                abiFilters abi
+            }
+        }
         buildFeatures {
             buildConfig true
         }
@@ -27,6 +35,15 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    packagingOptions {
+        /* Biblioteki VLC trzymamy w paczce spakowane. Nieskompresowane zajmują
+           w pliku do pobrania ponad 90 MB (obie architektury telewizorów),
+           a spakowane około połowy tego; instalator rozpakowuje je przy
+           instalacji (patrz CHANGELOG 2.1.9). */
+        jniLibs {
+            useLegacyPackaging true
         }
     }
 }
@@ -50,6 +67,11 @@ dependencies {
        (.m3u8) — bez niego taka playlista kończy się błędem „nieobsługiwany typ”. */
     implementation "androidx.media3:media3-exoplayer:$media3Version"
     implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
+    /* Silnik VLC (libvlc-android) — trzecia droga obrazu, włączana ręcznie
+       przełącznikiem „Odtwarzacz VLC (beta)”: własny demukser TS/HLS i własna
+       droga klatek do dekodera sprzętowego (patrz VlcEngine.java). Biblioteki
+       wchodzą do paczki tylko dla ABI telewizorów (patrz defaultConfig -> ndk). */
+    implementation "org.videolan.android:libvlc-all:$libvlcVersion"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

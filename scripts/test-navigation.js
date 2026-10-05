@@ -19,6 +19,9 @@ const css = fs.readFileSync(path.join(ROOT, "www", "styles.css"), "utf8").replac
 /* natywna obsługa pilota (klawisze multimedialne) — patrz sekcja 19 */
 const java = fs.readFileSync(path.join(ROOT, "android", "app", "src", "main", "java",
   "pl", "openiptv", "player", "MainActivity.java"), "utf8").replace(/\r\n/g, "\n");
+/* silnik VLC — osobny plik, tak samo czytany ze źródeł (patrz sekcja 27b) */
+const javaVlc = fs.readFileSync(path.join(ROOT, "android", "app", "src", "main", "java",
+  "pl", "openiptv", "player", "VlcEngine.java"), "utf8").replace(/\r\n/g, "\n");
 /* paczka Androida i jej wersje (patrz sekcja 27: odtwarzacz systemowy) */
 const gradle = fs.readFileSync(path.join(ROOT, "android", "app", "build.gradle"), "utf8").replace(/\r\n/g, "\n");
 const gradleVars = fs.readFileSync(path.join(ROOT, "android", "variables.gradle"), "utf8").replace(/\r\n/g, "\n");
@@ -328,7 +331,7 @@ check("obsluga klawiszy rozpoznaje pole szukania",
   src.indexOf("searchArrowTarget(key, caret === 0, caretEnd === field.value.length)") > 0);
 check("pasek odtwarzacza i menu opcji wstawiaja napisy z ikona",
   (src.match(/setIconLabel\(button, label\);/g) || []).length >= 2 &&
-  src.indexOf("var paused = exoActive() ? !state.exoPlaying : !!(video && video.paused);") > 0 &&
+  src.indexOf("var paused = nativeLayerActive() ? !nativePlaying() : !!(video && video.paused);") > 0 &&
   src.indexOf("setIconLabel(playButton, t(paused ? \"osd_play\" : \"osd_pause\"));") > 0 &&
   src.indexOf("setIconLabel(muteButton, muteLabel())") > 0);
 check("kafelek kanalu ma sama gwiazdke ulubionych (bez przycisku „<<” na archiwum)",
@@ -1363,7 +1366,7 @@ check("brak obrazu wykrywany po wymiarach klatki, nie po stanie odtwarzania",
   src.indexOf("return !!video && (video.videoWidth | 0) > 0 && (video.videoHeight | 0) > 0;") > 0 &&
   src.indexOf("var PICTURE_TIMEOUT = 6000;") > 0);
 check("budziki obrazu uzbrajane PO starcie silnika (token MSE/HLS inaczej je uniewaznial)",
-  src.indexOf("if (entry.engine !== \"exo\") {\n      armStartWatchdog(token);\n      armPictureWatchdog(token);\n    }") > 0 &&
+  src.indexOf("if (entry.engine !== \"exo\" && entry.engine !== \"vlc\") {\n      armStartWatchdog(token);\n      armPictureWatchdog(token);\n    }") > 0 &&
   src.indexOf("if (typeof token !== \"number\") token = state.engineToken;") > 0);
 check("pierwsza klatka zdejmuje budzik i zapamietuje sposob odtwarzania",
   src.indexOf("function notePicture()") > 0 &&
@@ -1954,6 +1957,11 @@ const queueBox = {
   state: { watchProgram: null },
   exoBridge: function () {
     return { playNative: function () { return "ok"; } };
+  },
+  /* tak samo pytanie do silnika VLC (patrz vlcBridge w app.js): o tym, czy kanał
+     nim idzie, decyduje przełącznik „vlcPlayer” */
+  vlcBridge: function () {
+    return { playVlc: function () { return "ok"; } };
   }
 };
 run(codeQueue, queueBox);
@@ -2026,6 +2034,32 @@ check("uruchomione: archiwum zostaje na dotychczasowych drogach",
 queueBox.state.watchProgram = null;
 queueBox.settings.nativePlayer = false;
 check("uruchomione: odtwarzacz systemowy jest domyslnie wylaczony (kolejka jak dotad)",
+  engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
+/* Silnik VLC idzie tą samą drogą: kanał NA ŻYWO, ręcznie włączony, i tylko tam,
+   gdzie most istnieje. Gdy włączone są oba przełączniki, kanał dostaje VLC — to on
+   jest drogą dla strumieni, na których dekoder odbiornika nie wyrabia. */
+queueBox.settings.vlcPlayer = true;
+const qVlc = engines("http://s/x.ts");
+check("uruchomione: kanal na zywo idzie silnikiem VLC, gdy przelacznik jest wlaczony",
+  qVlc.join(",") === "vlc,native,mse,native,hls" &&
+  queueBox.buildSourceQueue("http://s/x.ts")[0].url === "http://s/x.ts",
+  JSON.stringify(qVlc));
+queueBox.settings.engineHint = "mse";
+check("uruchomione: zapamietany silnik nie omija VLC (droga sprzetowa zostaje pierwsza)",
+  engines("http://s/x.ts").join(",") === "vlc,native,mse,native,hls",
+  JSON.stringify(engines("http://s/x.ts")));
+queueBox.settings.engineHint = "";
+queueBox.settings.nativePlayer = true;
+check("uruchomione: przy obu przelacznikach kanal dostaje VLC",
+  engines("http://s/x.ts").join(",") === "vlc,exo,native,mse,native,hls",
+  JSON.stringify(engines("http://s/x.ts")));
+queueBox.state.watchProgram = { title: "Wiadomosci", start: 1, end: 2 };
+check("uruchomione: archiwum nie idzie silnikiem VLC (wymaga przewijania)",
+  engines("http://s/x.ts").indexOf("vlc") < 0, JSON.stringify(engines("http://s/x.ts")));
+queueBox.state.watchProgram = null;
+queueBox.settings.nativePlayer = false;
+queueBox.settings.vlcPlayer = false;
+check("uruchomione: silnik VLC jest domyslnie wylaczony (kolejka jak dotad)",
   engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
 
 
@@ -2515,7 +2549,7 @@ check("kondycja obrazu: budzik chodzi tylko przy obrazie na zywo przez MSE",
   src.indexOf('if (entry.engine === "mse" && !state.watchProgram) startGuard();\n    else stopGuard();') > 0 &&
   src.indexOf('clearInterval(state.guardTicker);\n    state.guardTicker = null;') > 0 &&
   src.indexOf('stopGuard();\n    if (!instance) return;') > 0 &&
-  src.indexOf('stopGuard();\n    /* obraz systemowy gaśnie razem z kanałem') > 0);
+  src.indexOf('stopGuard();\n    /* obraz systemowy i VLC gasną razem z kanałem') > 0);
 check("kondycja obrazu: nowy kanal liczy kondycje od zera",
   src.indexOf('state.guardRecycles = 0;\n    state.guardGaveUp = false;\n    stopGuard();') > 0);
 check("panel diagnostyki: pokazuje pamiec interfejsu, zrywy i przestrajania",
@@ -2769,6 +2803,76 @@ check("odtwarzacz systemowy: nowe napisy sa w obu jezykach",
   src.indexOf("diag_exo_start: \"oddaję kanał odtwarzaczowi systemowemu\"") > 0 &&
   src.indexOf("diag_exo_start: \"handing the channel to the system player\"") > 0);
 
+/* --- 27b. silnik VLC (libVLC): trzecia droga obrazu -------------------------
+   Ten sam pomysł co odtwarzacz systemowy, ale inny silnik: libVLC ma własny
+   demukser TS/HLS i oddaje obraz przez TextureView, czyli tą samą drogą, którą
+   idą klatki pozostałych odtwarzaczy. Włączany ręcznie, tylko na kanale na żywo,
+   i tylko wtedy, gdy most istnieje; gdy nie da obrazu, kolejka idzie dalej. */
+check("VLC: silnik jest w paczce Androida (biblioteki tylko dla ABI telewizorow)",
+  gradle.indexOf("org.videolan.android:libvlc-all:$libvlcVersion") > 0 &&
+  gradleVars.indexOf("libvlcVersion = '3.6.5'") > 0 &&
+  gradleVars.indexOf("libvlcAbiFilters = ['arm64-v8a', 'armeabi-v7a']") > 0 &&
+  gradle.indexOf("for (abi in rootProject.ext.libvlcAbiFilters)") > 0 &&
+  gradle.indexOf("useLegacyPackaging true") > 0);
+check("VLC: obraz idzie kompozytorem GPU (TextureView), a nie sprzetowa plaszczyzna",
+  javaVlc.indexOf("import org.videolan.libvlc.util.VLCVideoLayout;") > 0 &&
+  javaVlc.indexOf("player.attachViews(layout, null, false, useTexture);") > 0 &&
+  javaVlc.indexOf("options.add(\"--no-mediacodec-dr\");") > 0 &&
+  javaVlc.indexOf("root.addView(layout, 0);") > 0 &&
+  javaVlc.indexOf("webView.setBackgroundColor(Color.TRANSPARENT);") > 0);
+check("VLC: sprzetowy dekoder wymagany (programowe 4K to slepa ulica)",
+  javaVlc.indexOf("media.setHWDecoderEnabled(true, true);") > 0 &&
+  javaVlc.indexOf("options.add(\"--avcodec-hw=mediacodec\");") > 0);
+check("VLC: panel diagnostyki ma liczby, ktorych nie ma droga systemowa",
+  javaVlc.indexOf("stats.lostPictures") > 0 &&
+  javaVlc.indexOf("stats.displayedPictures") > 0 &&
+  javaVlc.indexOf("stats.demuxCorrupted") > 0 &&
+  javaVlc.indexOf("stats.demuxBitrate") > 0 &&
+  javaVlc.indexOf("case MediaPlayer.Event.Vout:") > 0 &&
+  javaVlc.indexOf("IMedia.Stats stats = media != null ? media.getStats() : null;") > 0);
+check("VLC: most ma te same zadania, co droga systemowa",
+  java.indexOf("public String playVlc(final String url, final String userAgent, final boolean textureView)") > 0 &&
+  java.indexOf("public void stopVlc()") > 0 &&
+  java.indexOf("public void setVlcPlaying(final boolean playing)") > 0 &&
+  java.indexOf("public void setVlcMuted(final boolean muted)") > 0 &&
+  java.indexOf("public String vlcInfo()") > 0 &&
+  java.indexOf("window.__openiptvVlcEvent&&window.__openiptvVlcEvent(") > 0 &&
+  java.indexOf("initVlcEngine();") > 0);
+check("VLC: domyslnie wylaczony — wlacza go przelacznik w ustawieniach",
+  src.indexOf("vlcPlayer: false,") > 0 &&
+  src.indexOf("vlcTexture: true,") > 0 &&
+  src.indexOf("if (settings.vlcPlayer === true && vlcBridge() && !state.watchProgram) {") > 0 &&
+  html.indexOf('id="vlcPlayer"') > 0 &&
+  html.indexOf('id="vlcTexture"') > 0 &&
+  src.indexOf('$("vlcPlayer").checked = settings.vlcPlayer === true;') > 0 &&
+  src.indexOf('settings.vlcPlayer = $("vlcPlayer").checked;') > 0 &&
+  src.indexOf("vlc_player: \"VLC player (beta)") > 0 &&
+  src.indexOf("vlc_texture: \"VLC: picture through frame copy") > 0 &&
+  src.indexOf("vlc_player: \"Odtwarzacz VLC (beta)") > 0 &&
+  src.indexOf("vlc_texture: \"VLC: obraz przez kopiowanie klatek") > 0);
+check("VLC: bez mostu (webOS, przegladarka) droga jest pomijana",
+  src.indexOf("function vlcBridge() {") > 0 &&
+  src.indexOf("if (!bridge || typeof bridge.playVlc !== \"function\") return null;") > 0 &&
+  java.indexOf("if (vlcEngine == null || !VlcEngine.available()) return \"error: brak silnika\";") > 0);
+check("VLC: nowe napisy sa w obu jezykach",
+  src.indexOf("engine_vlc: \"VLC player\"") > 0 &&
+  src.indexOf("engine_vlc: \"odtwarzacz VLC\"") > 0 &&
+  src.indexOf("diag_vlc: \"VLC picture\"") > 0 &&
+  src.indexOf("diag_vlc: \"obraz VLC\"") > 0 &&
+  src.indexOf("diag_vlc_start: \"handing the channel to the VLC engine\"") > 0 &&
+  src.indexOf("diag_vlc_start: \"oddaję kanał silnikowi VLC\"") > 0 &&
+  src.indexOf("diag_vlc_native: \"VLC player (libVLC)\"") > 0 &&
+  src.indexOf("diag_vlc_native: \"odtwarzacz VLC (libVLC)\"") > 0 &&
+  src.indexOf("diag_vlc_lost: \"dropped frames\"") > 0 &&
+  src.indexOf("diag_vlc_lost: \"zgubione klatki\"") > 0);
+check("VLC: wspolna warstwa obu silnikow (pasek, pauza, wyciszenie)",
+  src.indexOf("function nativeLayerActive() {") > 0 &&
+  src.indexOf("return exoActive() || vlcActive();") > 0 &&
+  src.indexOf("function nativeSetPlaying(playing) {") > 0 &&
+  src.indexOf("function nativeSetMuted(muted) {") > 0 &&
+  src.indexOf("if (entry.engine === \"vlc\") startVlcSource(entry);") > 0 &&
+  src.indexOf("if (entry.engine !== \"exo\" && entry.engine !== \"vlc\") {") > 0);
+
 /* Zachowanie drogi natywnej, nie tylko obecność kodu: atrapa mostu (Java) + atrapa
    elementu <video>, którą droga natywna gasi. Zegar i budziki w rękach testu. */
 const exoStart = src.indexOf("var EXO_START_WAIT = 9000;");
@@ -2954,6 +3058,202 @@ check("odtwarzacz systemowy: panel czyta z mostu wersje i sprzetowy HEVC",
   xh.api.exoInfo().hevc === true);
 xh = exoHarness({ info: "" });
 check("odtwarzacz systemowy: brak odpowiedzi mostu nie psuje panelu", xh.api.exoInfo() === null);
+
+/* --- 27c. silnik VLC: zachowanie, nie tylko obecnosc kodu ------------------
+   Atrapa mostu (Java) + atrapa <video>, ktora droga natywna gasi. Budziki
+   w rekach testu, tak samo jak przy odtwarzaczu systemowym. Kod wycinamy
+   z app.js (nie kopiujemy); markExoMode i clearVideoQuietly naleza do bloku
+   odtwarzacza systemowego, wiec w atrapie robia to samo. */
+const vlcStart = src.indexOf("var VLC_START_WAIT = 9000;");
+const vlcQueueAt = src.indexOf("function buildSourceQueue(primaryUrl)", vlcStart);
+const vlcEnd = src.lastIndexOf("\n  }", vlcQueueAt) + 4;
+if (vlcStart < 0 || vlcQueueAt <= vlcStart || vlcEnd <= vlcStart) {
+  throw new Error("Nie znalazlem bloku odtwarzacza VLC w app.js");
+}
+const vlcCode = src.slice(vlcStart, vlcEnd);
+["vlcBridge", "vlcInfo", "vlcActive", "vlcPlay", "vlcVolume", "startVlcSource",
+  "stopVlc", "vlcEvent", "armVlcWatchdog"].forEach(function (fn) {
+  if (vlcCode.indexOf("function " + fn) < 0) {
+    throw new Error("Wyciety blok odtwarzacza VLC nie ma " + fn);
+  }
+});
+
+function vlcHarness(o) {
+  o = o || {};
+  const calls = { errors: [], notes: [], played: [], playing: [], muted: [], stopped: 0, timers: [] };
+  const classes = { html: [], body: [] };
+  const toggle = function (list, name, on) {
+    const at = list.indexOf(name);
+    if (on && at < 0) list.push(name);
+    if (!on && at >= 0) list.splice(at, 1);
+  };
+  /* atrapa mostu: app.js wola dokladnie te same metody, co prawdziwa Java */
+  const bridge = {
+    playVlc: function (url, ua, texture) {
+      calls.played.push({ url: url, ua: ua, texture: texture });
+      return o.playResult || "ok";
+    },
+    stopVlc: function () { calls.stopped++; },
+    setVlcPlaying: function (playing) { calls.playing.push(playing); },
+    setVlcMuted: function (muted) { calls.muted.push(muted); },
+    vlcInfo: function () {
+      return o.info === undefined
+        ? "{\"libvlc\":\"3.6.5\",\"api\":34,\"texture\":true,\"decoder\":\"hevc\",\"firstFrame\":true,\"lost\":3,\"bitrate\":8200}"
+        : o.info;
+    }
+  };
+  const video = {
+    pause: function () { calls.videoPaused = true; },
+    removeAttribute: function () { calls.videoCleared = true; },
+    load: function () {}
+  };
+  const sandbox = {
+    platformInfo: { native: o.native !== false, os: "androidtv" },
+    navigator: { userAgent: "UA-4K" },
+    settings: { vlcTexture: o.texture !== false },
+    state: {
+      engine: o.engine || "vlc",
+      engineToken: 7,
+      watchChannel: o.noChannel === true ? null : { name: "Eleven Sports 1 4K" },
+      watchProgram: null,
+      engineLoading: true,
+      engineInstance: null,
+      vlcPlaying: o.playing === true,
+      vlcWidth: o.width | 0,
+      vlcHeight: o.height | 0,
+      vlcMuted: o.muted === true,
+      vlcFirstFrame: o.firstFrame === true,
+      vlcPictureWaited: false,
+      watchStart: 0,
+      startTimer: null
+    },
+    t: function (key) { return "<" + key + ">"; },
+    $: function (id) {
+      if (id === "video") return video;
+      return { classList: { add: function () {}, remove: function () {} }, textContent: "" };
+    },
+    document: {
+      documentElement: { classList: { toggle: function (name, on) { toggle(classes.html, name, on); } } },
+      body: { classList: { toggle: function (name, on) { toggle(classes.body, name, on); } } }
+    },
+    OpenIptvNative: o.noBridge === true ? {} : bridge,
+    nextEngineToken: function () { return sandbox.state.engineToken; },
+    engineName: function (engine) { return "<engine_" + engine + ">"; },
+    handlePlaybackError: function (message) { calls.errors.push(message); },
+    diagNote: function (note) { calls.notes.push(note); },
+    noteStreamActivity: function () {},
+    scheduleRecentRecord: function () {},
+    updateOsd: function () {},
+    scheduleOsdHide: function () {},
+    clearStartWatchdog: function () { sandbox.state.startTimer = null; },
+    setTimeout: function (fn) { calls.timers.push(fn); return calls.timers.length; },
+    clearTimeout: function () {},
+    /* przezroczystosc strony i zgaszenie <video> — to samo, co robi blok
+       odtwarzacza systemowego (patrz markExoMode i clearVideoQuietly w app.js) */
+    markExoMode: function (on) {
+      const want = on !== false;
+      toggle(classes.html, "exo-player", want);
+      toggle(classes.body, "exo-player", want);
+    },
+    clearVideoQuietly: function () {
+      calls.videoPaused = true;
+      calls.videoCleared = true;
+    }
+  };
+  sandbox.window = sandbox;
+  run(vlcCode, sandbox);
+  return {
+    api: sandbox, calls: calls, classes: classes,
+    fire: function () {
+      const queued = calls.timers.splice(0);
+      queued.forEach(function (fn) { fn(); });
+      return queued.length;
+    }
+  };
+}
+
+let vh = vlcHarness({});
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+check("VLC: adres kanalu idzie do mostu razem z droga obrazu z ustawien",
+  vh.calls.played.length === 1 && vh.calls.played[0].url === "http://s/live/4k.ts" &&
+  vh.calls.played[0].ua === "UA-4K" && vh.calls.played[0].texture === true &&
+  vh.calls.videoCleared === true && vh.api.vlcActive() === true);
+check("VLC: obraz rysuje sie pod strona, wiec strona jest na ten czas przezroczysta",
+  vh.classes.html.indexOf("exo-player") >= 0 && vh.classes.body.indexOf("exo-player") >= 0);
+vh = vlcHarness({ texture: false });
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+check("VLC: przelacznik drogi obrazu idzie do mostu (wprost na plaszczyzne obrazu)",
+  vh.calls.played.length === 1 && vh.calls.played[0].texture === false);
+
+/* Zdarzenia z mostu trzymaja ten sam stan, co zdarzenia <video> na innych drogach. */
+vh = vlcHarness({});
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+vh.api.vlcEvent({ type: "size", width: 3840, height: 2160 });
+vh.api.vlcEvent({ type: "playing" });
+check("VLC: zdarzenie mostu mowi, ze obraz leci, jaka ma klatke i ze doszla na obraz",
+  vh.api.state.vlcPlaying === true && vh.api.state.engineLoading === false &&
+  vh.api.state.vlcWidth === 3840 && vh.api.state.vlcHeight === 2160 &&
+  vh.api.state.vlcFirstFrame === true);
+vh.api.vlcEvent({ type: "paused" });
+check("VLC: pauza z mostu gasi stan obrazu", vh.api.state.vlcPlaying === false);
+vh.api.vlcEvent({ type: "error", message: "brak kodeka" });
+check("VLC: blad mostu oddaje kanal kolejce (z powodem)",
+  vh.calls.errors.length === 1 && vh.calls.errors[0].indexOf("brak kodeka") > 0,
+  JSON.stringify(vh.calls.errors));
+
+/* Budzik: dzwiek gra, a klatek nie ma — kanal nie moze zostac na czarnym ekranie. */
+vh = vlcHarness({});
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+vh.api.vlcEvent({ type: "playing" });
+vh.fire();
+vh.fire();
+check("VLC: dzwiek bez klatki po budzetach oddaje kanal kolejce",
+  vh.calls.errors.length === 1 && vh.calls.errors[0].indexOf("<err_no_picture>") > 0,
+  JSON.stringify(vh.calls.errors));
+
+/* Pauza i wyciszenie ida mostem, a nie elementem <video>. */
+vh = vlcHarness({ playing: true });
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+vh.api.vlcVolume(true);
+vh.api.vlcPlay(false);
+check("VLC: wyciszenie i pauza ida mostem",
+  vh.calls.muted.join(",") === "true" && vh.calls.playing.join(",") === "false" &&
+  vh.api.vlcActive() === true);
+vh.api.stopVlc();
+check("VLC: zamkniecie obrazu gasi silnik i zdejmuje przezroczystosc",
+  vh.calls.stopped === 1 && vh.api.state.vlcPlaying === false &&
+  vh.classes.html.indexOf("exo-player") < 0 && vh.classes.body.indexOf("exo-player") < 0);
+
+/* Most, ktorego nie ma (webOS, przegladarka, paczka bez bibliotek VLC dla tej ABI). */
+vh = vlcHarness({ noBridge: true });
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+check("VLC: bez mostu kanal idzie kolejna droga (bez wywolania)",
+  vh.api.vlcBridge() === null && vh.calls.played.length === 0 && vh.calls.errors.length === 1);
+vh = vlcHarness({ playResult: "error: brak silnika" });
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+check("VLC: odmowa mostu konczy probe z powodem",
+  vh.calls.played.length === 1 && vh.calls.errors.length === 1 &&
+  vh.calls.errors[0].indexOf("error: brak silnika") > 0, JSON.stringify(vh.calls.errors));
+
+/* Rozpoznanie silnika (panel diagnostyki): to ono ma rozstrzygnac, czy brak obrazu
+   to wina dekodera, warstwy obrazu, czy samego strumienia (patrz diag_vlc_*). */
+vh = vlcHarness({});
+check("VLC: panel czyta z mostu wersje silnika, droge obrazu i zgubione klatki",
+  vh.api.vlcInfo() !== null && vh.api.vlcInfo().libvlc === "3.6.5" &&
+  vh.api.vlcInfo().texture === true && vh.api.vlcInfo().lost === 3);
+vh = vlcHarness({ info: "" });
+check("VLC: brak odpowiedzi mostu nie psuje panelu", vh.api.vlcInfo() === null);
+
+/* Wspolna warstwa obu silnikow: pasek odtwarzacza pyta o jedno, nie o dwa. */
+xh = exoHarness({ playing: true });
+check("pasek odtwarzacza: pauza i wyciszenie pytaja o oba silniki odbiornika",
+  xh.api.nativeLayerActive() === true && xh.api.nativePlaying() === true &&
+  xh.api.nativeMuted() === false);
+xh.api.nativeSetPlaying(false);
+xh.api.nativeSetMuted(true);
+check("pasek odtwarzacza: stan idzie do mostu wlasciwego silnika",
+  xh.calls.playCalls.join(",") === "false" && xh.calls.muted.join(",") === "true" &&
+  xh.api.state.exoPlaying === false && xh.api.state.exoMuted === true);
 
 /* --- 26. panel diagnostyki obrazu (dzwiek gra, a obrazu nie ma) ----------
    Kanal 4K zostawial czarny ekran i z kanapy nie bylo widac dlaczego: dzwiek

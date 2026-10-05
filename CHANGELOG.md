@@ -20,6 +20,17 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.9] — 2026-10-05
+
+### Dodano
+- **„Odtwarzacz VLC (beta)” — trzecia droga obrazu na kanale na żywo** — kanał może iść silnikiem VLC, który ma własny demukser TS/HLS, a włącza się go ręcznie w ustawieniach; domyślnie jest wyłączony, więc oglądanie bez niego wygląda jak dotąd.
+- **„VLC: obraz przez kopiowanie klatek”** — przełącznik wybiera, czy VLC składa klatki kompozytorem ekranu, czy rysuje wprost na płaszczyźnie obrazu odbiornika; to porównanie rozstrzyga, czy czarny obraz to wina warstwy obrazu, czy samego strumienia.
+- **Panel diagnostyki pokazuje liczby z VLC** — wiersz silnika mówi, którą drogą idzie obraz, ile klatek odtworzono i zgubiono, ile danych strumienia było uszkodzonych oraz jaki jest realny bitrate kanału.
+- **Paczka na Androida jest większa** — silnik VLC niesie własne biblioteki dla dwóch architektur telewizorów (Fire TV, Android TV), więc plik do pobrania rośnie z ~7 MB do ~50 MB; paczka webOS zostaje bez zmian.
+
+### Poprawiono
+- **Pauza, wznowienie i wyciszenie obsługują oba silniki odbiornika** — pasek odtwarzacza pyta o obraz tego silnika, który naprawdę go rysuje, więc przy włączonym VLC przycisk play/pauza nie pokazuje stanu odwrotnie.
+
 ## [2.1.8] — 2026-10-05
 
 ### Dodano
