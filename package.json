@@ -1,6 +1,6 @@
 {
   "name": "teleiptv",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "private": true,
   "description": "TeleIPTV - one web codebase, two builds: webOS (.ipk) and Android / Fire TV (.apk).",
   "engines": {

@@ -20,6 +20,17 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.4] — 2026-10-05
+
+### Poprawiono
+- **Kanał 4K gra bez zrywania obrazu** — odtwarzacz strumienia TS nie dogania już „na żywo”: po każdym dołożonym odcinku przeskakiwał na koniec buforu i to wyglądało jak transmisja, która nagle przyspiesza.
+- **Zapas obrazu dla 4K jest wielokrotnie większy niż dla HD** — taki kanał startuje z większej liczby odcinków playlisty, a czytnik nie wyprzedza obrazu ponad ~24 s zapasu; jeden wolniejszy odcinek nie opróżnia już bufora do zera.
+- **Odtwarzanie rusza na zapasie, a nie na pierwszych kilobajtach** — start czeka, aż w buforze będzie kilka sekund obrazu (na 4K kilkanaście), więc kanał nie zaczyna od kilku sekund szarpania.
+- **Bufor wstecz jest ograniczony do 20–45 s** — domyślne 180 s w pamięci odtwarzacza zajmowało przy 4K setki megabajtów i przeglądarka zaczynała przycinać obraz.
+- **Krótkie zrywki nie migają komunikatem „Ładowanie strumienia…”** — komunikat wchodzi dopiero wtedy, gdy obraz naprawdę nie wraca.
+- **Panel diagnostyki mówi, czy odbiornik wciągnie HEVC w odtwarzaczu strumienia TS** — nowy wiersz z możliwościami odtwarzacza oraz zaległością wobec transmisji, żeby odróżnić za wolne łącze od problemu z kodekiem.
+- **Google TV i Chromecast z Google TV są rozpoznawane osobno** — panel diagnostyki pokazuje, na jakim odbiorniku działa aplikacja, a aktualizacja w aplikacji wskazuje tym urządzeniom tę samą paczkę `.apk`.
+
 ## [2.1.3] — 2026-10-05
 
 ### Poprawiono

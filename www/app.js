@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.3";
+  var APP_VERSION = "2.1.4";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -348,7 +348,7 @@
     osd_enabled: "Mini-EPG na kanale (co teraz leci)",
     clock_enabled: "Zegar w rogu obrazu (widoczny tylko podczas oglądania)",
     platform_line: "Wykryto: {name} • interfejs: {mode}",
-    platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_webos: "webOS",
+    platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
     platform_android: "Android", platform_ios: "iOS", platform_browser: "komputer / przeglądarka",
     mode_tv: "telewizyjny (pilot)", mode_touch: "dotykowy",
     tv_hint: "OK – oglądaj • MENU / długie OK – opcje • ◀ ▲ ▼ ▶ – nawigacja • EPG: ◀ ▶ – godziny • w kanale: ▲ ▼ kanał, ◀ ▶ przewijanie",
@@ -430,6 +430,8 @@
     diag_no_picture_advance: "dźwięk gra bez obrazu przez {s} s — następny sposób odtwarzania",
     diag_picture_ok: "obraz jest ({engine}) — zostaję przy tym sposobie",
     diag_giveup_audio: "żaden sposób nie dał obrazu — dźwięk zatrzymany",
+    diag_mpegts: "mpegts.js (MSE) — co potrafi",
+    diag_feeder_lag: "zaległość wobec transmisji: {s} s — łącze wolniejsze niż kanał",
     diag_feeder: "z playlisty",
     diag_feeder_start: "HLS→TS: podaję odtwarzaczowi TS {n} odcinków playlisty",
     diag_feeder_failed: "HLS→TS: {reason}",
@@ -605,7 +607,7 @@
     osd_enabled: "Mini-EPG on channel (what's on now)",
     clock_enabled: "Clock in the corner (visible only while watching)",
     platform_line: "Detected: {name} • interface: {mode}",
-    platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_webos: "webOS",
+    platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
     platform_android: "Android", platform_ios: "iOS", platform_browser: "desktop / browser",
     mode_tv: "TV (remote)", mode_touch: "touch",
     tv_hint: "OK – watch • MENU / long OK – options • ◀ ▲ ▼ ▶ – navigate • Guide: ◀ ▶ – hours • in a channel: ▲ ▼ channel, ◀ ▶ seek",
@@ -686,6 +688,8 @@
     diag_no_picture_advance: "audio playing with no picture for {s} s — next playback path",
     diag_picture_ok: "picture is there ({engine}) — staying on this path",
     diag_giveup_audio: "no playback path produced a picture — audio stopped",
+    diag_mpegts: "mpegts.js (MSE) — what it supports",
+    diag_feeder_lag: "lag behind the broadcast: {s} s — connection slower than the channel",
     diag_feeder: "feed from playlist",
     diag_feeder_start: "HLS→TS: feeding {n} playlist segments to the TS player",
     diag_feeder_failed: "HLS→TS: {reason}",
@@ -947,7 +951,14 @@
       os = "firetv";
       kind = "tv";
     } else if (android) {
-      if (/android tv|\btv\b|bravia|shield|droidlogic|leanback|aft/.test(ua)) {
+      /* Google TV to też Android, ale odmiana inna niż Android TV: inny WebView
+         (aktualizowany ze Sklepu Play), więc panel diagnostyki musi to pokazać
+         wprost — na 4K HEVC te dwie drogi wypadają różnie. Ta sama gałąź łapie
+         Chromecast z Google TV („CrKey” w UA). */
+      if (/google tv|chromecast|crkey/.test(ua)) {
+        os = "googletv";
+        kind = "tv";
+      } else if (/android tv|\btv\b|bravia|shield|droidlogic|leanback|aft/.test(ua)) {
         os = "androidtv";
         kind = "tv";
       } else {
@@ -1687,7 +1698,7 @@
 
   /* Rozszerzenie paczki dla tej platformy: .apk (Android / Fire TV) lub .ipk (webOS) */
   function updateExtension() {
-    if (platformInfo.native && /^(android|androidtv|firetv)$/.test(platformInfo.os)) return "apk";
+    if (platformInfo.native && /^(android|androidtv|googletv|firetv)$/.test(platformInfo.os)) return "apk";
     if (platformInfo.os === "webos") return "ipk";
     return "";
   }
@@ -3421,6 +3432,10 @@
     video.addEventListener("playing", function () {
       noteStreamActivity();
       $("playerError").classList.add("hidden");
+      /* obraz naprawdę leci — komunikat o wczytywaniu nie ma po co się pokazywać
+         (patrz „waiting” niżej: krótkie zrywki meldujemy dopiero po chwili) */
+      clearTimeout(state.bufferTimer);
+      state.bufferTimer = null;
       clearStartWatchdog();
       /* dźwięk naprawdę ruszył — od tego miejsca pilnujemy, czy dojdzie do tego
          obraz; jeśli nie, panel diagnostyki otworzy się sam (armDiagAuto) */
@@ -3475,7 +3490,20 @@
          jest wczytywanie strumienia od zera, więc pasek pokazuje skok
          („Cofnięto o 10 s”), a nie „Ładowanie strumienia…” */
       if (seekNotice()) { showOsd(); return; }
-      showPlayerError(t("osd_buffering") + " (" + engineName(state.engine) + ")");
+      /* Zrywka na kanale na żywo bywa krótsza niż mrugnięcie oka. Komunikat
+         pokazujemy więc dopiero wtedy, gdy obraz naprawdę nie wraca: na kanale 4K
+         migał on przy każdym odcinku i wyglądało to jak zepsuty kanał, choć obraz
+         wracał po ułamku sekundy. */
+      clearTimeout(state.bufferTimer);
+      state.bufferTimer = setTimeout(function () {
+        state.bufferTimer = null;
+        var current = $("video");
+        if (!state.currentSource) return;
+        /* obraz wrócił w międzyczasie (klatki lecą, gotowość wysoka) — nie ma
+           czego meldować */
+        if (current && !current.paused && current.readyState >= 3) return;
+        showPlayerError(t("osd_buffering") + " (" + engineName(state.engine) + ")");
+      }, 800);
     });
 
     video.addEventListener("timeupdate", function () {
@@ -3752,6 +3780,19 @@
     lines.push(" " + t("diag_container") + ": HLS (.m3u8) " +
       diagSupport("application/vnd.apple.mpegurl").native +
       " · TS (video/mp2t) " + diagSupport("video/mp2t").native);
+    /* Co potrafi sam mpegts.js: to jego własny test MSE dla HEVC, a nie nasze
+       zgadywanie. Od tego zależy jedyna droga do obrazu dla kanału 4K nadawanego
+       jako playlista (patrz createHlsTsLoader), więc gdy obrazu nie ma, to jest
+       pierwsze miejsce, w które trzeba spojrzeć. */
+    try {
+      if (window.mpegts && window.mpegts.getFeatureList) {
+        var features = window.mpegts.getFeatureList();
+        lines.push(" " + t("diag_mpegts") + ": MSE " +
+          (features.msePlayback ? t("diag_yes") : t("diag_no")) + " · MSE HEVC " +
+          (features.mseH265Playback ? t("diag_yes") : t("diag_no")) +
+          " · " + String(features.networkLoaderName || "?"));
+      }
+    } catch (error) { /* starsza biblioteka bez tego testu */ }
     return lines;
   }
 
@@ -4111,12 +4152,81 @@
      skleja po nim resztki między wywołaniami), więc liczymy go sami. */
 
   var FEEDER_LIVE_SEGMENTS = 2;      /* od ilu ostatnich odcinków startujemy na żywo */
+  var FEEDER_LIVE_SEGMENTS_UHD = 6;  /* 4K: od tylu — patrz feederLiveSegments */
   var FEEDER_SEGMENT_RETRIES = 2;    /* ile razy ponawiamy odcinek, zanim to błąd */
   var FEEDER_PLAYLIST_FAILS = 3;     /* ile nieudanych odczytów playlisty przerywa próbę */
   var FEEDER_PLAYLIST_MIN = 1000;    /* najkrótsza przerwa między odczytami playlisty */
   var FEEDER_PLAYLIST_MAX = 4000;    /* najdłuższa przerwa między odczytami playlisty */
   var FEEDER_BUFFER_AHEAD = 10;      /* ile sekund obrazu trzymamy przed odtwarzaniem */
+
+  /* Zapas 4K jest większy niż HD i to jest cała różnica między obrazem gładkim
+     a zrywającym się. Odcinek 4K to kilka–kilkanaście megabajtów: gdy łącze
+     zwolni na parę sekund, zapas 10 s kończy się w połowie odcinka, obraz staje,
+     a po odebraniu reszty dekoder nadrabia go serią klatek — dokładnie to wygląda
+     jak „strumień nagle przyspieszył”. Zapas ~24 s zjada taki skok. Ceną jest
+     opóźnienie wobec transmisji i to jest świadomy wybór: nieprzerwany obraz jest
+     ważniejszy niż kilkanaście sekund różnicy. */
+  var FEEDER_BUFFER_AHEAD_UHD = 24;
+
+  /* Ile najdłużej każemy czekać na zapas przed startem odtwarzania (patrz
+     playWhenBuffered) — czytnik ma tyle, ile jego budżet na pierwsze klatki. */
+  var FEEDER_START_WAIT = 15000;
+
+  /* Od tylu sekund zaległości wobec transmisji meldujemy to w panelu diagnostyki:
+     po tym widać, czy obraz zrywa się przez za wolne łącze, czy z innego powodu. */
+  var FEEDER_LAG_NOTE = 30;
+
   var FEEDER_SEEN_MAX = 480;         /* po ilu odcinkach zapominamy już wysłane adresy */
+
+  /* Ile obrazu czeka w buforze przed miejscem odtwarzania. Liczymy to sami, bo
+     mpegts.js trzyma własny zapas dopiero za tym, co już oddał odtwarzaczowi —
+     a odtwarzaczowi trzeba podać następny odcinek, zanim skończy się poprzedni.
+
+     Dwa przypadki, w których starszy rachunek („przedział, w którym stoi
+     odtwarzanie”) zwracał zero: strumień ze znacznikami czasu zaczynającymi się
+     za zerem (świeży bufor) i odtwarzanie stojące w dziurze bufora. Zero znaczyło
+     „brak zapasu”, więc czytnik pobierał odcinki dalej — zapas rósł bez końca,
+     a obraz oddalał się od transmisji. Teraz zerem jest naprawdę brak danych:
+     cokolwiek jest przed odtwarzaniem, liczy się jako zapas. */
+  function videoBufferedAhead(video) {
+    var buffered = video && video.buffered;
+    if (!buffered || !buffered.length) return 0;
+    var at = video.currentTime || 0;
+    var ahead = 0;
+    for (var i = 0; i < buffered.length; i++) {
+      if (buffered.start(i) <= at && buffered.end(i) >= at) return buffered.end(i) - at;
+      if (buffered.end(i) > at && buffered.end(i) - at > ahead) ahead = buffered.end(i) - at;
+    }
+    return ahead;
+  }
+
+  /* Czy kanał jest (albo bywa) 4K — z nazwy kanału (patrz markUhdChannel) albo
+     z rozmiaru klatki (patrz videoIsUhd). Pytamy ostrożnie, bo czytnik działa
+     także wtedy, gdy odpowiedzi jeszcze nie ma: kanał dopiero się wczytuje. */
+  function feederChannelIsUhd() {
+    try {
+      if (typeof videoIsUhd === "function" && videoIsUhd()) return true;
+      return !!(typeof state !== "undefined" && state && state.uhdSeen);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /* Kanał 4K trzyma większy zapas (patrz FEEDER_BUFFER_AHEAD_UHD). */
+  function feederBufferAheadLimit() {
+    return feederChannelIsUhd() ? FEEDER_BUFFER_AHEAD_UHD : FEEDER_BUFFER_AHEAD;
+  }
+
+  /* Od ilu ostatnich odcinków playlisty startujemy. Zapas obrazu nie rośnie sam
+     z siebie: playlista publikuje odcinki w tempie transmisji, więc zapas przed
+     odtwarzaniem to dokładnie to, ile odcinków weźmiemy z jej końca. Dwa odcinki
+     (HD) to kilka sekund — dla zwykłego kanału dość. Na 4K to za mało: odcinek
+     waży kilka–kilkanaście megabajtów, więc jeden wolniejszy odcinek opróżnia
+     cały zapas i obraz staje. Sześć odcinków to ~24 s zapasu, którym da się zjeść
+     skok łącza (patrz FEEDER_LIVE_SEGMENTS_UHD). */
+  function feederLiveSegments() {
+    return feederChannelIsUhd() ? FEEDER_LIVE_SEGMENTS_UHD : FEEDER_LIVE_SEGMENTS;
+  }
 
   function feederReason(error) {
     var text = String((error && error.message) || error || "");
@@ -4318,13 +4428,15 @@
 
     /* Na żywo playlista trzyma kilkanaście odcinków wstecz — puszczenie ich
        wszystkich od początku dałoby obraz pół minuty za kanałem. Startujemy od
-       ostatnich, a starsze tylko zapamiętujemy: bez tego przy kolejnym odczycie
-       playlisty wróciłyby jako „nowe” i zagrały po najnowszych (czas w strumieniu
-       stanąłby w miejscu), a przy kolejnych odczytach dokładamy wyłącznie nowe. */
+       ostatnich (ile ich brać, mówi feederLiveSegments — 4K bierze więcej, bo
+       tylko tak powstaje jego zapas), a starsze tylko zapamiętujemy: bez tego przy
+       kolejnym odczycie playlisty wróciłyby jako „nowe” i zagrały po najnowszych
+       (czas w strumieniu stanąłby w miejscu), a przy kolejnych odczytach dokładamy
+       wyłącznie nowe. */
     FeederLoader.prototype._queueSegments = function (list) {
       var start = this._started || this._endList
         ? 0
-        : Math.max(0, list.segments.length - FEEDER_LIVE_SEGMENTS);
+        : Math.max(0, list.segments.length - feederLiveSegments());
       if (this._seenCount > FEEDER_SEEN_MAX) { this._seen = {}; this._seenCount = 0; }
       for (var i = 0; i < list.segments.length; i++) {
         var url = feederResolveUrl(this._playlistUrl, list.segments[i]);
@@ -4336,6 +4448,27 @@
       }
     };
 
+    /* Rachunek zapasu jest wspólny z resztą odtwarzania (patrz videoBufferedAhead):
+       start kanału czeka na ten sam zapas, więc nie ma dwóch różnych prawd o tym,
+       ile obrazu jest przed odtwarzaniem. */
+    FeederLoader.prototype._bufferedAhead = function (video) {
+      return videoBufferedAhead(video);
+    };
+
+    /* Zaległość wobec transmisji meldujemy w panelu diagnostyki, ale nie częściej
+       niż raz na kilkanaście sekund: przy wolnym łączu ta sama linia rosłaby w kółko,
+       a dziennik panelu jest krótki. Linia jest po to, żeby odróżnić zrywający się
+       obraz (kodek, dekoder) od kanału, którego łącze nie wyrabia — przy drugim
+       zapas rośnie i to widać właśnie tutaj (patrz domyślny budżet lagu). */
+    FeederLoader.prototype._noteLag = function (ahead) {
+      var lag = ahead + this._pending.length * (this._target || 4);
+      if (lag < FEEDER_LAG_NOTE) { this._lagNoted = false; return; }
+      var now = Date.now();
+      if (this._lagNoted && now - (this._lagNotedAt || 0) < 15000) return;
+      this._lagNoted = true;
+      this._lagNotedAt = now;
+      diagNote(t("diag_feeder_lag", { s: Math.round(lag) }));
+    };
     /* Odcinki idą po jednym i w kolejności: dopiero po odebraniu jednego zaczynamy
        następny, żeby nie trzymać w pamięci całej playlisty. */
     FeederLoader.prototype._pump = function () {
@@ -4349,12 +4482,24 @@
         return;
       }
       var video = videoRef ? videoRef() : null;
-      /* Nie wyprzedzamy obrazu: kilkanaście sekund buforu na kanale na żywo to
-         obraz daleko za transmisją (mpegts.js musiałby go potem „gonić”). */
-      if (video && this._bufferedAhead(video) > FEEDER_BUFFER_AHEAD) {
-        this._schedulePump(1000);
+      var ahead = video ? this._bufferedAhead(video) : 0;
+      /* Zaległość wobec transmisji: to, co czeka w buforze, plus to, co leży
+         jeszcze w kolejce odcinków. Rośnie tylko wtedy, gdy łącze nie wyrabia za
+         kanałem — wtedy obraz gra dalej, ale coraz dalej od „na żywo”, i to trzeba
+         zobaczyć w panelu diagnostyki (patrz _noteLag). */
+      this._noteLag(ahead);
+      /* Nie wyprzedzamy obrazu: kilkadziesiąt sekund buforu na kanale na żywo to
+         obraz daleko za transmisją (mpegts.js musiałby go potem „gonić”). Zapas 4K
+         jest większy niż HD (patrz FEEDER_BUFFER_AHEAD_UHD) — jeden wolniejszy
+         odcinek nie może opróżnić bufora do zera, bo właśnie z tego brały się
+         zrywania obrazu. */
+      if (video && ahead > feederBufferAheadLimit()) {
+        /* pół sekundy, a nie sekunda: tyle wystarczy, żeby nie przegapić chwili,
+           w której zapas spadnie pod limit */
+        this._schedulePump(500);
         return;
       }
+
       var url = this._pending.shift();
       this._fetching = true;
       httpGet(url, true).then(function (data) {
@@ -4409,16 +4554,6 @@
       return null;
     };
 
-    FeederLoader.prototype._bufferedAhead = function (video) {
-      var buffered = video.buffered;
-      if (!buffered || !buffered.length) return 0;
-      var at = video.currentTime || 0;
-      for (var i = 0; i < buffered.length; i++) {
-        if (buffered.start(i) <= at && buffered.end(i) >= at) return buffered.end(i) - at;
-      }
-      return 0;
-    };
-
     FeederLoader.prototype._schedulePump = function (delay) {
       var self = this;
       if (this._stopped || this._pumpTimer) return;
@@ -4469,33 +4604,41 @@
       }
       var video = resetVideoElement();
       if (!video) return;
+      /* Konfiguracja wspólna dla każdej drogi przez mpegts.js. Trzy rzeczy są tu
+         wybrane świadomie i wszystkie trzy dotyczą 4K:
+
+         • bez doganiania „na żywo” (liveBufferLatencyChasing). To ustawienie robi
+           dokładnie to, co użytkownik opisuje jako „strumień nagle przyspieszył”:
+           po każdym dołożonym odcinku przeskakuje currentTime na koniec buforu
+           (buffered.end - 0.5 s). Na 4K odpala się to bez przerwy, bo zapas rośnie
+           skokowo po każdym odcinku — obraz skacze do przodu razem z dźwiękiem
+           albo obok niego. Zapasu pilnuje sama aplikacja: na kanale z playlisty
+           czytnik (FEEDER_BUFFER_AHEAD_UHD), a od startu każdego kanału
+           playWhenBuffered. Nie ma czego doganiać.
+
+         • pamięć wstecz: domyślne 180 s w MSE to przy 4K (kilkanaście megabajtów
+           na sekundę) setki megabajtów trzymane bez potrzeby. Przeglądarka zaczyna
+           wtedy przycinać bufor — i to też widać jako zrywanie obrazu. Wstecz
+           wystarczy 20–45 s: tyle, co na chwilowe zatrzymanie i przewinięcie.
+
+         • lazyLoad zostaje wyłączony: dane muszą się wczytywać także wtedy, gdy
+           odtwarzanie jeszcze nie ruszyło (patrz playWhenBuffered). */
       var config = {
         enableWorker: true,               /* parsowanie TS poza wątkiem UI */
         lazyLoad: false,
-        stashInitialSize: 512,
         enableStashBuffer: false,
         autoCleanupSourceBuffer: true,
-        liveBufferLatencyChasing: true,
-        liveBufferLatencyMaxLatency: 3.5,
-        liveBufferLatencyMinRemain: 0.5
+        autoCleanupMaxBackwardDuration: 45,
+        autoCleanupMinBackwardDuration: 20,
+        liveBufferLatencyChasing: false
       };
       /* Kanał nadawany jako playlista (typowy 4K HEVC): mpegts.js nie czyta .m3u8,
          więc dostaje własny czytnik, który skleja odcinki playlisty w jeden ciągły
          strumień TS. Dla takiego kanału to jedyna droga do obrazu na Androidzie —
          hls.js nie rozbiera HEVC, a <video> nie czyta playlisty (patrz
-         createHlsTsLoader). Pozostałe ustawienia zostają bez zmian. */
+         createHlsTsLoader). */
       if (entry.hls) {
         config.customLoader = createHlsTsLoader(window.mpegts, function () { return $("video"); });
-        /* Czytnik playlisty sam pilnuje, ile obrazu ma przed odtwarzaniem
-           (patrz FEEDER_BUFFER_AHEAD), więc doganianie „na żywo” z mpegts.js
-           musi tu zostać wyłączone. Dla strumienia z czytnika wygląda ono tak:
-           po każdym dołożonym odcinku odtwarzacz przeskakuje na sam koniec
-           buforu (buffered.end - 0.5 s), gotowy zapas znika i kanał w kółko
-           wpada w „Ładowanie strumienia…”: obraz idzie klatka po klatce, choć
-           strumień jest cały czas dociągany. Zapas czytnika jest stabilny
-           (odcinki idą jeden po drugim, bez dziur), więc nie ma czego doganiać —
-           a nadmiar i tak odcina sam czytnik. */
-        config.liveBufferLatencyChasing = false;
       }
       var player;
       try {
@@ -4523,8 +4666,16 @@
       try {
         player.attachMediaElement(video);
         player.load();
-        var promise = player.play();
-        if (promise && promise.catch) promise.catch(function () {});
+        /* Start dopiero na zapasie, a nie na pierwszych kilobajtach: dekoder, któremu
+           każe się grać od razu, przez kilka sekund nadrabia to, co przyszło, a przy
+           4K wygląda to jak zrywanie. Patrz playWhenBuffered. */
+        playWhenBuffered(
+          player,
+          video,
+          token,
+          mseStartAhead(),
+          state.engineFeeder ? FEEDER_START_WAIT : MSE_START_WAIT
+        );
       } catch (playError) {
         handlePlaybackError(t("err_stream") + " (" + engineLabel("mse") + ": " + playError.message + ")");
         return;
@@ -4534,6 +4685,57 @@
       if (state.engineToken !== token) return;
       nextSourceEntry(String(error && error.message ? error.message : ""), 1200);
     });
+  }
+
+  /* =========  START NA ZAPASIE: NIE ZACZYNAMY, DOPÓKI NIE MA CZEGO GRAĆ  =========
+
+     Kanał na żywo startuje inaczej niż film: pierwsze kilobajty przychodzą
+     natychmiast, ale obraz z nich to ułamek sekundy. Dekoder, któremu każe się
+     grać od razu, przez kilka sekund „dogania” to, co przyszło — klatka po klatce,
+     z przycięciami, a każdy wolniejszy odcinek w 4K wygląda dokładnie tak, jak
+     zrywanie. Dlatego odtwarzanie rusza dopiero wtedy, gdy w buforze jest zapas —
+     i to liczony z elementu <video> (patrz videoBufferedAhead), czyli z tego, co
+     naprawdę weszło do bufora MSE, a nie z liczby pobranych odcinków. Gotowość
+     dekodera („canplay”) nie jest tu miarodajna: przy 4K potrafi przyjść przy
+     jednej sekundzie obrazu.
+
+     Czekanie jest ograniczone (MSE_START_WAIT, dla czytnika playlisty
+     FEEDER_START_WAIT — tyle, ile ma budżet na pierwsze klatki): kanał, który nie
+     zdąży zebrać zapasu, startuje na tym, co ma, a budziki obrazu pilnują go
+     dalej jak dotąd. Film z archiwum startuje od razu (ahead = 0) — tam nie ma
+     czego doganiać, a użytkownik czeka na obraz po wybraniu pozycji. */
+
+  var MSE_START_AHEAD = 3;         /* HD: od ilu sekund zapasu zaczynamy grać */
+  var MSE_START_AHEAD_UHD = 12;    /* 4K: odcinek jest cięższy, zapas musi być większy */
+  var MSE_START_WAIT = 9000;       /* dłużej niż to nie każemy czekać na zapas */
+
+  function mseStartAhead() {
+    if (state.watchProgram) return 0;
+    return (state.uhdSeen || videoIsUhd()) ? MSE_START_AHEAD_UHD : MSE_START_AHEAD;
+  }
+
+  function playWhenBuffered(player, video, token, ahead, wait) {
+    var startedAt = Date.now();
+    var limit = wait || MSE_START_WAIT;
+    function attempt() {
+      /* kanał zmieniony albo próba porzucona — nie ma czego startować */
+      if (state.engineToken !== token || !state.watchChannel) return;
+      var ready = videoBufferedAhead(video) >= ahead;
+      var expired = Date.now() - startedAt >= limit;
+      /* błąd dekodera też kończy czekanie: zdarzenie „error” zajmie się kanałem */
+      if (ready || expired || video.error) {
+        try {
+          var promise = player.play();
+          if (promise && promise.catch) promise.catch(function () {});
+        } catch (error) { /* dekoder zgłosi to zdarzeniem „error” */ }
+        return;
+      }
+      /* Dane naprawdę przychodzą (gotowość rośnie) — trzymajmy próbę przy życiu,
+         bo budziki patrzą właśnie na ruch w strumieniu (patrz streamStillComing). */
+      if (video.readyState >= 1) noteStreamActivity();
+      setTimeout(attempt, 250);
+    }
+    attempt();
   }
 
   /* Czy hls.js mówi wprost, że tego strumienia nie rozbierze (a nie, że jeden
