@@ -20,6 +20,12 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.3] — 2026-10-05
+
+### Poprawiono
+- **Kanał 4K z playlisty dochodzi wreszcie do obrazu** — kanał rozpoznany jako 4K (z nazwy albo z metadanych klatki) nie dostaje już wymuszonej warstwy obrazu, więc nie jest przeładowywany w połowie wczytywania; czytnik playlisty dostaje też dłuższy czas na pierwsze klatki, a odebrana playlista i odebrany odcinek liczą się jako ruch w strumieniu, więc próba nie jest ucinana, gdy obraz dopiero się pobiera.
+- **4K nie wraca już do dekodera, który nic nie dał** — gdy dekoder sprzętowy miał swoją próbę na początku kolejki (typowy kanał z playlistą), rozpoznanie 4K nie przestawia kanału z powrotem na niego, tylko zostawia go na drodze, która właśnie się wczytuje.
+
 ## [2.1.2] — 2026-10-05
 
 ### Poprawiono

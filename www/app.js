@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.2";
+  var APP_VERSION = "2.1.3";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -401,6 +401,8 @@
     diag_container: "kontenery",
     diag_channel: "kanał", diag_engine: "sposób odtwarzania", diag_entry: "próba",
     diag_retries: "powtórzenia", diag_layer: "warstwa obrazu", diag_uhd: "4K",
+    diag_uhd_named: "tak (rozpoznane)",
+    diag_uhd_note: "kanał 4K w nazwie — zdejmuję wymuszoną warstwę obrazu",
     diag_size: "obraz", diag_frames: "klatki", diag_dropped: "odrzucone",
     diag_audio: "dźwięk", diag_playing: "gra", diag_paused: "pauza",
     diag_time: "czas", diag_buffer: "bufor", diag_muted: "wyciszony",
@@ -656,6 +658,8 @@
     diag_container: "containers",
     diag_channel: "channel", diag_engine: "playback path", diag_entry: "attempt",
     diag_retries: "retries", diag_layer: "picture layer", diag_uhd: "4K",
+    diag_uhd_named: "yes (recognised)",
+    diag_uhd_note: "4K in the channel name — clearing the forced picture layer",
     diag_size: "picture", diag_frames: "frames", diag_dropped: "dropped",
     diag_audio: "audio", diag_playing: "playing", diag_paused: "paused",
     diag_time: "time", diag_buffer: "buffer", diag_muted: "muted",
@@ -3768,7 +3772,7 @@
       " · " + t("diag_layer") + ": " +
       (document.body.classList.contains("video-layer-fix") ? t("diag_yes") : t("diag_no")));
     lines.push(" " + t("diag_uhd") + " (" + t("diag_size") + "): " +
-      (videoIsUhd() ? t("diag_yes") : t("diag_no")));
+      (videoIsUhd() ? t("diag_yes") : (state.uhdSeen ? t("diag_uhd_named") : t("diag_no"))));
 
     var video = $("video");
     if (!video) {
@@ -4264,6 +4268,10 @@
       httpGet(this._playlistUrl, false).then(function (text) {
         if (self._stopped) return;
         self._playlistFails = 0;
+        /* Odebrana playlista to ruch w strumieniu tego kanału. Bez tego budziki
+           widziały ciszę w <video> (odcinki jeszcze się pobierają) i ucinały
+           próbę, choć czytnik właśnie pracuje — patrz noteStreamActivity. */
+        noteStreamActivity();
         var list = parseHlsPlaylist(text);
         if (list.variants.length) {
           if (depth >= 2) { self._fail(t("err_feeder_variants")); return; }
@@ -4359,6 +4367,9 @@
         if (!chunk) { self._segmentFailed(url, typeof data); return; }
         if (!chunk.byteLength) { self._pump(); return; }
         self._segmentFails = 0;
+        /* Odebrany odcinek = strumień naprawdę coś dociągnął: to trzyma próbę
+           przy życiu i przedłuża budżet czytnika (patrz streamStillComing) */
+        noteStreamActivity();
         self._status = lib.LoaderStatus.kBuffering;
         if (self._onDataArrival) self._onDataArrival(chunk, self._offset, self._offset + chunk.byteLength);
         self._offset += chunk.byteLength;
@@ -4743,6 +4754,17 @@
   /* Ile ms odtwarzania bez ani jednej klatki uznajemy za zablokowany dekoder. */
   var PICTURE_TIMEOUT = 6000;
 
+  /* Kanał z playlisty dostaje własne, dłuższe budżety na pierwsze klatki: czytnik
+     (patrz createHlsTsLoader) musi najpierw pobrać dwa odcinki, a przy 4K HEVC to
+     kilka megabajtów i start ciężkiego dekodera. Sześć sekund ucinało taki kanał
+     w połowie wczytywania, a ponieważ to ostatnia droga do obrazu, po wyczerpaniu
+     kolejki zostawał komunikat, że kanału nie da się odtworzyć. Inna jest też
+     cisza w strumieniu: o tym, czy odcinek przyszedł, mówi sam czytnik
+     (patrz streamStillComing). */
+  var FEEDER_PICTURE_TIMEOUT = 20000;
+  var FEEDER_AUDIO_ONLY_TIMEOUT = 20000;
+  var FEEDER_STREAM_STALL = 15000;
+
   /* Twardy budżet dla przypadku „dźwięk gra, a obrazu nie ma ANI JEDNEJ klatki”.
      To nie jest wolne wczytywanie: dekoder już odtwarza strumień, tylko obrazu
      nie oddaje — na kanale 4K HEVC dźwięk grał tak bez końca (80 s nic nie
@@ -4750,6 +4772,17 @@
      go NIE przedłuża, bo dociąganie danych przy czarnym ekranie nic tu nie
      zmieni (patrz armPictureWatchdog). */
   var AUDIO_ONLY_TIMEOUT = 8000;
+
+  /* Budżety jednej próby. Kanał czytany z playlisty ma je dłuższe, bo jego obraz
+     dopiero się pobiera (patrz FEEDER_PICTURE_TIMEOUT) — a to jedyna droga do
+     obrazu dla takiego kanału, więc nie wolno jej uciąć jak zwykłego HD. */
+  function pictureTimeout() {
+    return state.engineFeeder ? FEEDER_PICTURE_TIMEOUT : PICTURE_TIMEOUT;
+  }
+
+  function audioOnlyTimeout() {
+    return state.engineFeeder ? FEEDER_AUDIO_ONLY_TIMEOUT : AUDIO_ONLY_TIMEOUT;
+  }
 
   /* Jedna próba dostaje więcej czasu niż PICTURE_TIMEOUT, gdy wiadomo, że
      strumień jest „ciężki” albo dopiero się łączy:
@@ -4804,6 +4837,23 @@
     return -1;
   }
 
+  /* Nazwa kanału to jedyna informacja o rozdzielczości, jaką mamy PRZED startem
+     odtwarzania — a właśnie wtedy trzeba wiedzieć, że wymuszona warstwa obrazu
+     zostawia kanał 4K na czarnym ekranie (patrz noteUhd). */
+  function channelNameIsUhd(name) {
+    return /(4k|uhd|2160)/i.test(String(name || ""));
+  }
+
+  /* Kanał 4K rozpoznany z nazwy traktujemy jak rozpoznany od razu: zdejmujemy
+     wymuszoną warstwę obrazu jeszcze przed pierwszym sposobem odtwarzania.
+     Bez tego 4K wychodziło dopiero z metadanych klatki i przeładowywało kanał na
+     świeżym elemencie — a na kanale z playlisty to przeładowanie kosztowało
+     ponowne pobranie odcinków i kończyło się „brakiem obrazu” (patrz noteUhd). */
+  function markUhdChannel() {
+    state.uhdSeen = true;
+    if (applyVideoLayerFix(false)) diagNote(t("diag_uhd_note"));
+  }
+
   /* Kanał okazał się 4K (metadane klatki albo manifest HLS — patrz videoIsUhd,
      manifestIsUhd). Przy takim strumieniu wracamy do tego, jak grał, zanim
      aplikacja zaczęła się uczyć silników (preferEngine, applyVideoLayerFix):
@@ -4812,7 +4862,10 @@
          ekran (dekoder coś składa, ale obraz nie trafia na ekran),
        • bez obrazu pierwszą próbę oddajemy dekoderowi sprzętowemu, bo 4K,
          a zwłaszcza HEVC, rozbiera praktycznie tylko on (mpegts.js i hls.js
-         wciągają do MSE zwykle sam dźwięk).
+         wciągają do MSE zwykle sam dźwięk) — ale tylko wtedy, gdy ten dekoder
+         naprawdę ma jeszcze przed sobą swoją próbę: gdy kolejka zaczynała się od
+         wpisu sprzętowego (patrz buildSourceQueue), jego próba już się odbyła
+         i wracanie do niej tylko kręci kolejkę w kółko.
 
      Klasę warstwy da się zdjąć tylko razem z elementem <video> — na gotowym
      dekoderze samo jej zdjęcie nie pomaga (patrz resetVideoElement) — a sposób
@@ -4838,10 +4891,14 @@
     var switched = false;
     if (state.engine !== "native" && !state.uhdNativeTried) {
       var index = nativeEntryIndex();
-      if (index >= 0) {
+      if (index > state.sourceIndex) {
         state.uhdNativeTried = true;
         state.sourceIndex = index;
         switched = true;
+      } else if (index >= 0) {
+        /* wpis sprzętowy jest już za nami (albo to on właśnie gra) — ten dekoder
+           dostał swoją próbę i nie dał obrazu, więc nie wracamy do niego */
+        state.uhdNativeTried = true;
       }
     }
     /* nic nie zmieniliśmy: obrazu nie ma, ale to zwykła droga kolejki prób
@@ -4853,7 +4910,9 @@
   }
 
   function waitBudget() {
-    if (videoIsUhd()) return UHD_WAIT;
+    /* 4K bywa rozpoznane, zanim pojawi się pierwsza klatka: z nazwy kanału
+       (patrz markUhdChannel) albo z manifestu HLS (patrz noteUhd) */
+    if (videoIsUhd() || state.uhdSeen) return UHD_WAIT;
     var video = $("video");
     if (!video || video.readyState < 1) return CONNECT_WAIT;
     return PICTURE_TIMEOUT;
@@ -4865,7 +4924,12 @@
      pokazać obrazu — z obrazu robiło się „co chwila ładuje”. */
   function streamStillComing() {
     if (!state.entryWaitStart) return false;
-    if (Date.now() - state.lastActivityAt >= STREAM_STALL) return false;
+    /* Cisza znaczy „kanał stanął”, ale u czytnika playlisty cisza w <video> nic
+       nie znaczy: odcinki pobiera on sam i o ruchu mówi dopiero odebrany odcinek
+       (patrz _pump, noteStreamActivity). Jego próbę przedłużamy więc do końca
+       czasu przeznaczonego na wpis kolejki (patrz waitBudget). */
+    var stall = state.engineFeeder ? FEEDER_STREAM_STALL : STREAM_STALL;
+    if (Date.now() - state.lastActivityAt >= stall) return false;
     return Date.now() - state.entryWaitStart < waitBudget();
   }
 
@@ -4881,10 +4945,11 @@
      zawsze — kolejka prób nie przechodziła dalej, bo <video> „grało”.
 
      Kolejność reakcji jest celowa:
-       1. twardy budżet — dźwięk bez ANI JEDNEJ klatki przez AUDIO_ONLY_TIMEOUT:
-          koniec tej próby, bo taki kanał nie naprawi się samym czekaniem,
+       1. twardy budżet — dźwięk bez ANI JEDNEJ klatki przez audioOnlyTimeout()
+          (patrz FEEDER_AUDIO_ONLY_TIMEOUT): koniec tej próby, bo taki kanał nie
+          naprawi się samym czekaniem,
        2. kanał, który naprawdę coś jeszcze dociąga (albo dopiero się łączy),
-          dostaje kolejne PICTURE_TIMEOUT — bez tego wolny 4K był restartowany
+          dostaje kolejny pictureTimeout() — bez tego wolny 4K był restartowany
           w połowie wczytywania,
        3. naprawa warstwy obrazu (Fire TV potrafi oddać sam dźwięk) i jedna
           powtórka tego samego strumienia — działa u większości telewizorów,
@@ -4893,11 +4958,11 @@
           odtwarza dekoder sprzętowy, a obrazu nie potrafi (MSE dekoduje ten
           sam strumień inną drogą). */
   function armPictureWatchdog(token) {
-    armPictureWatchdogIn(token, PICTURE_TIMEOUT);
+    armPictureWatchdogIn(token, pictureTimeout());
   }
 
   /* Budzik obrazu z własnym odstępem — przy dźwięku bez obrazu nie ma po co
-     czekać całych PICTURE_TIMEOUT, gdy do twardego budżetu zostało mniej. */
+     czekać całego pictureTimeout(), gdy do twardego budżetu zostało mniej. */
   function armPictureWatchdogIn(token, delay) {
     clearPictureWatchdog();
     if (typeof token !== "number") token = state.engineToken;
@@ -4917,14 +4982,14 @@
       /* 1. twardy budżet: dźwięk bez ani jednej klatki — następny sposób
          odtwarzania. Dekoder, który przez tyle sekund nie oddał ani jednej
          klatki, nie zrobi tego także później. */
-      if (audioPlaying && audioFor >= AUDIO_ONLY_TIMEOUT) {
+      if (audioPlaying && audioFor >= audioOnlyTimeout()) {
         diagNote(t("diag_no_picture_advance", { s: Math.round(audioFor / 1000) }));
         nextSourceEntry(t("err_no_picture"), 0, false, 0, t("err_no_picture_hint"));
         return;
       }
       /* 2. strumień naprawdę coś dociąga — próbę przedłużamy, ale tylko do końca
          czasu przewidzianego dla jednego wpisu kolejki. */
-      if (streamStillComing()) { armPictureWatchdogIn(token, PICTURE_TIMEOUT); return; }
+      if (streamStillComing()) { armPictureWatchdogIn(token, pictureTimeout()); return; }
       /* 3. Warstwa obrazu pomaga dekoderom, które oddają sam dźwięk — ale przy 4K
          była to tylko niepotrzebna zmiana ciężkiego obrazu (a sama warstwa
          potrafi tam zostawić czarny ekran), więc kanał rozpoznany jako 4K od
@@ -4937,7 +5002,7 @@
       /* 4. Dźwięk gra, ale do twardego budżetu jeszcze zostało (kanał dopiero co
          ruszył) — dobierzemy się do końca budżetu, a nie po PICTURE_TIMEOUT. */
       if (audioPlaying && audioSince > 0) {
-        armPictureWatchdogIn(token, AUDIO_ONLY_TIMEOUT - audioFor);
+        armPictureWatchdogIn(token, audioOnlyTimeout() - audioFor);
         return;
       }
       /* 5. Jedna runda po wszystkich sposobach odtwarzania wystarczy: powtarzanie
@@ -5154,6 +5219,10 @@
     /* nowy kanał: rozdzielczość i sprzętowa próba liczą się od zera */
     state.uhdSeen = false;
     state.uhdNativeTried = false;
+    /* nazwa kanału mówi wprost, że to 4K — rozpoznajemy to przed startem
+       odtwarzania, żeby wymuszona warstwa obrazu nie zdążyła wejść kanałowi
+       w drogę (patrz markUhdChannel) */
+    if (channelNameIsUhd(channel.name)) markUhdChannel();
     /* nowy kanał = nowa szansa na świeżą diagnozę obrazu (patrz maybeAutoDiagnose) */
     state.diagAutoShown = false;
     state.sourceIndex = -1;          /* -1 → pierwszy wpis wybierze nextSourceEntry() */

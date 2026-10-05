@@ -1381,10 +1381,11 @@ check("kanal 4K nie jest restartowany w polowie wczytywania (budziki patrza na r
   src.indexOf("var STREAM_STALL = 6000;") > 0 &&
   src.indexOf("function streamStillComing()") > 0 &&
   src.indexOf("if (!state.entryWaitStart) return false;") > 0 &&
-  src.indexOf("if (Date.now() - state.lastActivityAt >= STREAM_STALL) return false;") > 0 &&
+  src.indexOf("var stall = state.engineFeeder ? FEEDER_STREAM_STALL : STREAM_STALL;") > 0 &&
+  src.indexOf("if (Date.now() - state.lastActivityAt >= stall) return false;") > 0 &&
   src.indexOf("video.addEventListener(\"progress\", noteStreamActivity);") > 0 &&
   src.indexOf("if (streamStillComing()) { armStartWatchdog(token); return; }") > 0 &&
-  src.indexOf("if (streamStillComing()) { armPictureWatchdogIn(token, PICTURE_TIMEOUT); return; }") > 0 &&
+  src.indexOf("if (streamStillComing()) { armPictureWatchdogIn(token, pictureTimeout()); return; }") > 0 &&
   src.indexOf("if (!state.pictureRetried && !videoIsUhd() && !state.uhdSeen && applyVideoLayerFix(true)) {") > 0 &&
   src.indexOf("state.entryWaitStart = Date.now();\n    state.lastActivityAt = Date.now();") > 0);
 
@@ -1394,7 +1395,8 @@ if (picStart < 0 || picEnd <= picStart) throw new Error("Nie znalazlem budzika o
 const codePicture = src.slice(picStart, src.lastIndexOf("\n\n", picEnd) + 2);
 ["videoHasPicture", "armPictureWatchdog", "retryCurrentEntry", "clearPictureWatchdog",
   "notePicture", "applyVideoLayerFix", "rememberEngine", "noteUhd", "manifestIsUhd",
-  "nativeCanPlay", "nativeEntryIndex"].forEach(function (fn) {
+  "nativeCanPlay", "nativeEntryIndex", "pictureTimeout", "audioOnlyTimeout",
+  "channelNameIsUhd", "markUhdChannel"].forEach(function (fn) {
   if (codePicture.indexOf("function " + fn) < 0) throw new Error("Wyciety blok nie ma " + fn);
 });
 
@@ -1422,6 +1424,9 @@ function pictureHarness(o) {
       watchChannel: { name: "TVN" },
       engineToken: 7,
       engine: o.engine || "native",
+      /* czy tę próbę prowadzi własny czytnik playlisty (patrz createHlsTsLoader) —
+         jego budżety są dłuższe, bo odcinki dopiero się pobierają */
+      engineFeeder: o.engineFeeder === true,
       pictureTimer: null,
       pictureRetried: false,
       /* rozpoznanie 4K przy kanale (metadane klatki albo manifest HLS) */
@@ -1615,8 +1620,8 @@ check("dzwiek bez obrazu: budzet liczy sie od zdarzenia „playing”, a ruch w 
   src.indexOf("state.audioStartedAt = state.audioStartedAt || Date.now();") > 0 &&
   src.indexOf("if (!notePicture()) armPictureWatchdog();") > 0 &&
   src.indexOf("var audioSince = state.audioStartedAt || state.entryWaitStart || 0;") > 0 &&
-  src.indexOf("if (audioPlaying && audioFor >= AUDIO_ONLY_TIMEOUT) {") > 0 &&
-  src.indexOf("armPictureWatchdogIn(token, AUDIO_ONLY_TIMEOUT - audioFor);") > 0 &&
+  src.indexOf("if (audioPlaying && audioFor >= audioOnlyTimeout()) {") > 0 &&
+  src.indexOf("armPictureWatchdogIn(token, audioOnlyTimeout() - audioFor);") > 0 &&
   src.indexOf("state.audioStartedAt = 0;") > 0);
 
 const AUDIO_ONLY_MS = 8000;
@@ -1656,6 +1661,53 @@ ph.fire();
 check("uruchomione: liczy sie czas dzwieku, a nie wiek proby (8 s dzwieku konczy probe)",
   ph.calls.next.length === 1 && ph.calls.started.length === 0,
   JSON.stringify(ph.calls.next));
+
+/* Kanał z playlisty (4K HEVC) ma dłuższe budżety: jego obraz dopiero się pobiera
+   (czytnik skleja odcinki w jeden strumień TS), a to ostatnia droga do obrazu —
+   ucięta jak zwykłe HD, kończyła kanał komunikatem, że nie da się go odtworzyć. */
+check("kanal z playlisty: budzety obrazu sa dluzsze (obraz sie jeszcze pobiera)",
+  src.indexOf("var FEEDER_PICTURE_TIMEOUT = 20000;") > 0 &&
+  src.indexOf("var FEEDER_AUDIO_ONLY_TIMEOUT = 20000;") > 0 &&
+  src.indexOf("var FEEDER_STREAM_STALL = 15000;") > 0 &&
+  src.indexOf("function pictureTimeout() {") > 0 &&
+  src.indexOf("return state.engineFeeder ? FEEDER_PICTURE_TIMEOUT : PICTURE_TIMEOUT;") > 0 &&
+  src.indexOf("function audioOnlyTimeout() {") > 0 &&
+  src.indexOf("return state.engineFeeder ? FEEDER_AUDIO_ONLY_TIMEOUT : AUDIO_ONLY_TIMEOUT;") > 0 &&
+  src.indexOf("armPictureWatchdogIn(token, pictureTimeout());") > 0);
+ph = pictureHarness({ engineFeeder: true, nowMs: NOW4K, waitStart: NOW4K - 2000,
+  activity: NOW4K - 500, readyState: 2, audioStartedAt: NOW4K - 9000 });
+check("uruchomione: czytnik playlisty ma 20 s na pierwsze klatki (HD jak dotad 6 s)",
+  ph.api.pictureTimeout() === 20000 && ph.api.audioOnlyTimeout() === 20000 &&
+  pictureHarness({ nowMs: NOW4K }).api.pictureTimeout() === 6000 &&
+  pictureHarness({ nowMs: NOW4K }).api.audioOnlyTimeout() === 8000,
+  ph.api.pictureTimeout() + "/" + ph.api.audioOnlyTimeout());
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: 9 s samego dzwieku na czytniku playlisty nie ucina jeszcze proby",
+  ph.calls.next.length === 0 && ph.calls.started.length === 0 &&
+  ph.api.state.pictureTimer !== null, JSON.stringify(ph.calls.next));
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 2000, activity: NOW4K - 500,
+  readyState: 2, audioStartedAt: NOW4K - 9000 });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: poza czytnikiem playlisty 9 s samego dzwieku konczy probe (8 s jak dotad)",
+  ph.calls.next.length === 1, JSON.stringify(ph.calls.next));
+
+/* Cisza w <video> nie ucina próby czytnika: o odcinkach mówi sam czytnik
+   (patrz noteStreamActivity), więc liczy się jego własny, dłuższy czas ciszy. */
+ph = pictureHarness({ engineFeeder: true, nowMs: NOW4K, waitStart: NOW4K - 12000,
+  activity: NOW4K - 10000, readyState: 0 });
+check("uruchomione: 10 s ciszy nie ucina proby czytnika playlisty",
+  ph.api.streamStillComing() === true, String(ph.api.streamStillComing()));
+ph = pictureHarness({ engineFeeder: true, nowMs: NOW4K, waitStart: NOW4K - 20000,
+  activity: NOW4K - 16000, readyState: 0 });
+check("uruchomione: cisza dluzsza niz czas czytnika konczy probe",
+  ph.api.streamStillComing() === false, String(ph.api.streamStillComing()));
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 31000, activity: NOW4K - 500,
+  readyState: 0, uhdSeen: true });
+check("uruchomione: 4K rozpoznane z nazwy kanalu ma budzet 4K, nawet bez metadanych klatki",
+  ph.api.waitBudget() === 30000 && ph.api.streamStillComing() === false,
+  String(ph.api.waitBudget()));
 
 /* Wyczerpanie kolejki prob: dzwiek nie moze grac dalej pod komunikatem „kanal nie
    dziala”. Sprawdzamy ostatni krok kolejki na wycietej funkcji nextSourceEntry. */
@@ -1787,12 +1839,20 @@ check("uruchomione: 4K na dekoderze sprzetowym bez warstwy obrazu gra dalej",
   ph.api.noteUhd() === false && ph.calls.started.length === 0 && ph.calls.pending.length === 0,
   JSON.stringify(ph.calls.started));
 
-/* kanał 4K z samym dźwiękiem (MSE nie rozbiera HEVC): pierwsza próba idzie do
-   dekodera sprzętowego — i tylko raz na kanał, żeby kolejka nie kręciła się w kółko */
-ph = pictureHarness({ engine: "mse", sourceIndex: 1 });
-check("uruchomione: 4K bez obrazu przestawia sie na dekoder sprzetowy",
+/* kanał 4K z samym dźwiękiem (MSE nie rozbiera HEVC), a dekoder sprzętowy ma
+   jeszcze swoją próbę przed sobą (zapamiętany sposób odtwarzania wyprzedził go):
+   próba wraca do sprzętu — i tylko raz na kanał, żeby kolejka się nie kręciła */
+ph = pictureHarness({
+  engine: "mse", sourceIndex: 0, canPlayType: "maybe",
+  sources: [
+    { engine: "mse", url: "http://s/x.m3u8", hls: true },
+    { engine: "native", url: "http://s/x.m3u8" },
+    { engine: "hls", url: "http://s/x.m3u8" }
+  ]
+});
+check("uruchomione: 4K bez obrazu przestawia sie na dekoder sprzetowy (jeszcze nie probowany)",
   ph.api.noteUhd() === true && ph.api.state.uhdNativeTried === true &&
-  ph.api.state.sourceIndex === 0 && ph.calls.destroyed === 1 && ph.calls.pending.length === 1,
+  ph.api.state.sourceIndex === 1 && ph.calls.destroyed === 1 && ph.calls.pending.length === 1,
   JSON.stringify({ index: ph.api.state.sourceIndex }));
 ph.fire();
 check("uruchomione: przestawienie trafia na wpis natywny",
@@ -1802,11 +1862,66 @@ check("uruchomione: drugie przestawienie na dekoder sprzetowy juz sie nie zdarza
   ph.api.noteUhd() === false && ph.calls.started.length === 1,
   String(ph.calls.started.length));
 
-ph = pictureHarness({ engine: "mse", sourceIndex: 1, nativeTried: true });
-check("uruchomione: bez obrazu i bez czego przestawiac kanal nie startuje od nowa",
-  ph.api.noteUhd() === false && ph.calls.destroyed === 0 &&
+/* Dekoder sprzętowy stoi na początku kolejki, więc gdy 4K wyjdzie później (typowy
+   kanał z playlisty), jego próba już się odbyła — powrót do niego tylko kręciłby
+   kolejkę w kółko, a kanał zostawał bez obrazu na dobrym strumieniu. */
+ph = pictureHarness({
+  engine: "mse", sourceIndex: 2, canPlayType: "maybe",
+  sources: [
+    { engine: "native", url: "http://s/x.m3u8" },
+    { engine: "hls", url: "http://s/x.m3u8" },
+    { engine: "mse", url: "http://s/x.m3u8", hls: true }
+  ]
+});
+check("uruchomione: 4K nie wraca do dekodera sprzetowego, ktory juz byl probowany",
+  ph.api.noteUhd() === false && ph.api.state.uhdNativeTried === true &&
+  ph.api.state.sourceIndex === 2 && ph.calls.destroyed === 0 &&
   ph.calls.started.length === 0 && ph.calls.pending.length === 0,
-  JSON.stringify(ph.calls.started));
+  JSON.stringify({ index: ph.api.state.sourceIndex, started: ph.calls.started }));
+
+/* Eleven Sports 1 4K: nazwa mówi wprost, że to 4K, więc warstwa obrazu jest zdjęta
+   od startu, a gdy 4K wychodzi z metadanych klatki na czytniku playlisty, kanał
+   zostaje na tym czytniku — na świeżym elemencie, ale bez powrotu do sprzętu */
+ph = pictureHarness({
+  uhd: true, engine: "mse", sourceIndex: 2, layerFix: true,
+  sources: [
+    { engine: "native", url: "http://s/x.m3u8" },
+    { engine: "hls", url: "http://s/x.m3u8" },
+    { engine: "mse", url: "http://s/x.m3u8", hls: true }
+  ]
+});
+check("uruchomione: 4K z playlisty zostaje na czytniku playlisty, a warstwa obrazu schodzi",
+  ph.api.noteUhd() === true && ph.api.state.sourceIndex === 2 &&
+  ph.calls.destroyed === 1 && ph.calls.pending.length === 1 && ph.calls.started.length === 0,
+  JSON.stringify({ index: ph.api.state.sourceIndex }));
+ph.fire();
+check("uruchomione: powtorka idzie do czytnika playlisty (nie do dekodera sprzetowego)",
+  ph.calls.started.length === 1 && ph.calls.started[0].engine === "mse" &&
+  ph.calls.started[0].hls === true, JSON.stringify(ph.calls.started));
+
+/* Nazwa kanału to jedyna informacja o rozdzielczości, jaką mamy przed startem
+   odtwarzania — po niej zdejmujemy wymuszoną warstwę obrazu, zanim wejdzie
+   kanałowi w drogę (przy 4K to ona zostawia czarny ekran). */
+check("kanal 4K z nazwy jest rozpoznany przed pierwszym sposobem odtwarzania",
+  src.indexOf("function channelNameIsUhd(name)") > 0 &&
+  src.indexOf("if (channelNameIsUhd(channel.name)) markUhdChannel();") > 0 &&
+  src.indexOf("state.uhdSeen = true;\n    if (applyVideoLayerFix(false)) diagNote(t(\"diag_uhd_note\"));") > 0);
+ph = pictureHarness({});
+check("uruchomione: nazwa kanalu wprost mowi, kiedy to 4K",
+  ph.api.channelNameIsUhd("Eleven Sports 1 4K") === true &&
+  ph.api.channelNameIsUhd("Love Nature UHD") === true &&
+  ph.api.channelNameIsUhd("TVP 2160p") === true &&
+  ph.api.channelNameIsUhd("TVN HD") === false &&
+  ph.api.channelNameIsUhd("Canal+ Sport") === false &&
+  ph.api.channelNameIsUhd(null) === false,
+  String(ph.api.channelNameIsUhd("Eleven Sports 1 4K")));
+ph = pictureHarness({ layerFix: true });
+ph.api.markUhdChannel();
+check("uruchomione: 4K z nazwy kanalu zdejmuje wymuszona warstwe obrazu od razu",
+  ph.api.state.uhdSeen === true && ph.api.settings.videoLayerFix === false &&
+  ph.classes.indexOf("video-layer-fix") < 0 && ph.calls.saves === 1 &&
+  ph.calls.notes.join(",") === "<diag_uhd_note>",
+  JSON.stringify({ classes: ph.classes, notes: ph.calls.notes }));
 
 /* 4K rozpoznane z manifestu nie ma wymiarow klatki (dekoder oddaje sam dzwiek),
    a mimo to nie dostaje wymuszonej warstwy obrazu — budzik idzie dalej */
@@ -1963,14 +2078,35 @@ check("kanal z playlisty: obrazu nie wyprzedzamy (bufor na zywo) i znamy powody 
 const feederStart = src.indexOf("var FEEDER_LIVE_SEGMENTS");
 const feederEnd = src.indexOf("function startMseSource(");
 if (feederStart < 0 || feederEnd <= feederStart) throw new Error("Nie znalazlem czytnika HLS→TS w app.js");
+/* Czytnik sam melduje, co odebrał (patrz noteStreamActivity): odebrana playlista
+   i odebrany odcinek to ruch w strumieniu. Odpowiedzi httpGet są „natychmiastowe”
+   (własny then), żeby dało się to sprawdzić bez czekania na mikrozadania. */
+const feederCalls = { activity: 0 };
+let feederText = "";
+/* Bajty muszą powstać w tym samym kontekście co czytnik: _asChunk sprawdza
+   `instanceof ArrayBuffer`, które nie działa między realmami (patrz niżej) */
+let feederBinary = null;
 const feederStubs = {
   t: function (key) { return "<" + key + ">"; },
   diagNote: function () {},
-  httpGet: function () { return Promise.resolve({}); },
+  noteStreamActivity: function () { feederCalls.activity++; },
+  videoRef: null,
+  lib: {
+    LoaderStatus: { kIdle: 0, kConnecting: 1, kBuffering: 2, kComplete: 3, kError: 4 },
+    LoaderErrors: { EXCEPTION: 1 }
+  },
+  httpGet: function (url, asArrayBuffer) {
+    return { then: function (ok) { ok(asArrayBuffer ? feederBinary : feederText); } };
+  },
   setTimeout: function () { return 1; },
   clearTimeout: function () {}
 };
 const feederBox = run(src.slice(feederStart, feederEnd), feederStubs);
+feederBinary = vm.runInContext("new ArrayBuffer(8)", feederBox);
+/* Czytnik melduje własny ruch (patrz noteStreamActivity) — bez tego budziki widzą
+   tylko ciszę w <video> (odcinki się jeszcze pobierają) i ucinają próbę. */
+check("kanal z playlisty: odebrana playlista i odcinek licza sie jako ruch w strumieniu",
+  (src.slice(feederStart, feederEnd).match(/noteStreamActivity\(\);/g) || []).length === 2);
 
 const masterList = feederBox.parseHlsPlaylist([
   "#EXTM3U",
@@ -2090,6 +2226,48 @@ check("czytnik HLS: trzecia nieudana proba odcinka konczy te probe (z powodem w 
   fs1.calls.failed.length === 1 && fs1.calls.failed[0] === "<err_feeder_segment>" &&
   fs1.calls.retry.length === 2,
   JSON.stringify(fs1.calls));
+
+/* Odebrany odcinek i odebrana playlista meldują się jako ruch w strumieniu
+   (patrz noteStreamActivity, streamStillComing): bez tego budziki obrazu widzą
+   ciszę w <video> i ucinają próbę, która właśnie się wczytuje — tak 4K z playlisty
+   traciło obraz w połowie pobierania odcinków. */
+const pumpActivity = (function () {
+  /* metody, których dotyka _pump/_readPlaylist — w atrapie są doklejane po jednej */
+  feederMethod("_schedulePump");
+  feederMethod("_scheduleRefresh");
+  feederMethod("_asChunk");
+  const pump = feederMethod("_pump");
+  const seg = feederSeg({ pending: ["http://s/live/kanal/od1.ts"] });
+  seg._stopped = false;
+  seg._fetching = false;
+  seg._offset = 0;
+  seg._segmentFails = 0;
+  seg._onDataArrival = function () {};
+  const before = feederCalls.activity;
+  pump.call(seg);
+  return { before: before, after: feederCalls.activity, offset: seg._offset, pending: seg._pending.length };
+})();
+check("czytnik HLS: odebrany odcinek melduje ruch w strumieniu",
+  pumpActivity.after === pumpActivity.before + 1 && pumpActivity.offset === 8 &&
+  pumpActivity.pending === 0, JSON.stringify(pumpActivity));
+
+const playlistActivity = (function () {
+  const read = feederMethod("_readPlaylist");
+  const seg = feederSeg({});
+  seg._stopped = false;
+  seg._target = 4;
+  seg._pending = [];
+  /* odcinek już wysłany, więc próba kończy się na samym odczycie playlisty */
+  seg._seen = { "http://s/live/kanal/od1.ts": true };
+  seg._seenCount = 1;
+  feederText = "#EXTM3U\n#EXTINF:4,\nod1.ts\n";
+  const before = feederCalls.activity;
+  read.call(seg, 0);
+  return { before: before, after: feederCalls.activity, pending: seg._pending.join(",") };
+})();
+check("czytnik HLS: odebrana playlista melduje ruch w strumieniu",
+  playlistActivity.after === playlistActivity.before + 1 &&
+  playlistActivity.pending === "", JSON.stringify(playlistActivity));
 
 feederMethod("_asChunk");
 vm.runInContext("var __probe = {}; var __ab = new ArrayBuffer(8); var __view = new Uint8Array(__ab, 4, 2);\n" +

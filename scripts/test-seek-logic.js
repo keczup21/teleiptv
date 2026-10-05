@@ -173,7 +173,7 @@ function zapHarness(o) {
    interesuje nas tylko decyzja, gdzie wraca „Wstecz” i co sie zeruje. */
 function playHarness(o) {
   o = o || {};
-  const calls = { screens: [], seekCleared: 0 };
+  const calls = { screens: [], seekCleared: 0, markedUhd: 0 };
   const sandbox = {
     state: {
       playerReturn: o.playerReturn || "browserScreen",
@@ -189,6 +189,10 @@ function playHarness(o) {
     destroyEngine: function () {},
     buildCatchupUrl: function () { return "http://host/catchup.ts"; },
     buildSourceQueue: function (source) { return [{ url: source }]; },
+    /* nazwa kanału mówi wprost, że to 4K (patrz channelNameIsUhd) — atrapa, żeby
+       wejście w kanał nie potrzebowało prawdziwego obrazu */
+    channelNameIsUhd: function () { return o.uhdName === true; },
+    markUhdChannel: function () { calls.markedUhd++; },
     showScreen: function (id) { calls.screens.push(id); },
     t: function (k) { return k; },
     buildOsdActions: function () {},
@@ -456,6 +460,17 @@ check("nowe okno archiwum: stara pauza na zywo nie obowiazuje, obraz sie wlacza"
   p.api.state.isArchive === true && p.api.state.livePauseAt === 0 &&
   p.api.state.watchChannel === CH && p.calls.screens[0] === "playerScreen",
   JSON.stringify({ isArchive: p.api.state.isArchive, livePauseAt: p.api.state.livePauseAt, screens: p.calls.screens }));
+
+/* Kanał z „4K” w nazwie: rozpoznajemy go przy wejściu w kanał, jeszcze przed
+   pierwszym sposobem odtwarzania (patrz markUhdChannel) */
+p = playHarness({ uhdName: true });
+p.api.playChannel(CH, null, "browserScreen");
+check("kanal 4K z nazwy jest rozpoznany przy wejsciu w kanal",
+  p.calls.markedUhd === 1, "rozpoznan: " + p.calls.markedUhd);
+p = playHarness({});
+p.api.playChannel(CH, null, "browserScreen");
+check("zwykly kanal nie jest rozpoznawany jako 4K",
+  p.calls.markedUhd === 0, "rozpoznan: " + p.calls.markedUhd);
 
 /* --- 10. pasek przewijania archiwum („cofnieto / przesunieto o N s”) -----
    Po skoku dekoder musi doniesc obraz na nowa pozycje i zglasza wtedy
