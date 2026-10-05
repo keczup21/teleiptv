@@ -470,9 +470,12 @@ body.video-layer-fix .player-screen video {
 /* ---------- odtwarzacz systemowy (Android: obraz POD stroną) ----------
    Kanał na żywo oddajemy odtwarzaczowi odbiornika (patrz startExoSource w app.js),
    a on rysuje klatki na własnej warstwie POD stroną — tak gra każda inna aplikacja
-   IPTV na Androidzie i tylko tak 4K idzie sprzętowo, bez JavaScriptu i MSE. Żeby ten
-   obraz było widać, strona musi być w tym miejscu przezroczysta; klasę zakłada
-   app.js na <html> i <body> tylko na czas takiego odtwarzania (markExoMode). */
+   IPTV na Androidzie i tylko tak 4K idzie sprzętowo, bez JavaScriptu i MSE. Warstwę
+   obrazu rysuje TextureView (MainActivity -> initNativePlayer), czyli kompozytor GPU
+   — nie sprzętowa płaszczyzna obrazu, która na części odbiorników zostawia czarny
+   ekran (ta sama przypadłość, którą leczy „video-layer-fix” wyżej). Żeby ten obraz
+   było widać, strona musi być w tym miejscu przezroczysta; klasę zakłada app.js na
+   <html> i <body> tylko na czas takiego odtwarzania (markExoMode). */
 html.exo-player, body.exo-player { background: transparent; }
 body.exo-player .screen { background: transparent; }
 /* Pasek odtwarzacza leży nad obrazem z innej warstwy, więc rozmywanie tła nie ma

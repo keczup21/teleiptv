@@ -2697,7 +2697,7 @@ check("odtwarzacz systemowy: zdarzenia wracaja do strony pod ta sama nazwa",
   java.indexOf("onIsPlayingChanged(boolean playing)") > 0 &&
   java.indexOf("onPlayerError(PlaybackException error)") > 0);
 check("odtwarzacz systemowy: obraz rysuje sie pod strona, wiec strona jest przezroczysta",
-  java.indexOf("root.addView(surfaceView, 0);") > 0 &&
+  java.indexOf("root.addView(videoView, 0);") > 0 &&
   java.indexOf("webView.setBackgroundColor(Color.TRANSPARENT);") > 0 &&
   src.indexOf("root.classList.toggle(\"exo-player\", want)") > 0 &&
   src.indexOf("document.body.classList.toggle(\"exo-player\", want)") > 0 &&
@@ -2705,10 +2705,39 @@ check("odtwarzacz systemowy: obraz rysuje sie pod strona, wiec strona jest przez
   css.indexOf("body.exo-player .screen { background: transparent; }") > 0);
 check("odtwarzacz systemowy: bufor na zywo krotszy niz domyslne 50 s",
   java.indexOf(".setBufferDurationsMs(8000, 24000, 1500, 4000)") > 0 &&
-  java.indexOf("player.setVideoSurfaceView(surfaceView);") > 0 &&
+  java.indexOf("player.setVideoTextureView(videoView);") > 0 &&
   java.indexOf("player.setMediaItem(MediaItem.fromUri(Uri.parse(url)));") > 0 &&
   java.indexOf("setAllowCrossProtocolRedirects(true)") > 0 &&
   java.indexOf("FLAG_KEEP_SCREEN_ON") > 0);
+/* Warstwa obrazu: na odbiorniku, na którym element <video> zostawał czarny, dopóki
+   klatki nie poszły kompozytorem GPU (patrz „video-layer-fix” w styles.css), klatki
+   ExoPlayera nie mogą iść sprzętową płaszczyzną obrazu — SurfaceView. TextureView
+   prowadzi je tą samą drogą co <video>, więc obraz ma się gdzie pokazać. */
+check("odtwarzacz systemowy: obraz idzie kompozytorem GPU, a nie sprzetowa plaszczyzna",
+  java.indexOf("import android.view.TextureView;") > 0 &&
+  java.indexOf("import android.view.SurfaceView;") < 0 &&
+  java.indexOf("private TextureView videoView;") > 0 &&
+  java.indexOf("videoView = new TextureView(this);") > 0 &&
+  java.indexOf("videoView.setSurfaceTextureListener(") > 0 &&
+  java.indexOf("player.setVideoTextureView(videoView);") > 0 &&
+  java.indexOf("player.clearVideoSurface();") > 0 &&
+  java.indexOf("videoView.setVisibility(View.VISIBLE);") > 0);
+/* Diagnostyka musi umieć odróżnić „dekoder nie nadąża” od „klatek nie widać”:
+   inaczej szukanie naprawy jest zgadywaniem (patrz nativeInfo w MainActivity). */
+check("odtwarzacz systemowy: panel diagnostyki zna dekoder, klatki na obrazie i zgubione",
+  java.indexOf("player.addAnalyticsListener(new AnalyticsListener()") > 0 &&
+  java.indexOf("onVideoDecoderInitialized(AnalyticsListener.EventTime eventTime") > 0 &&
+  java.indexOf("onDroppedVideoFrames(AnalyticsListener.EventTime eventTime") > 0 &&
+  java.indexOf("public void onRenderedFirstFrame()") > 0 &&
+  java.indexOf("info.put(\"decoder\", nativeDecoder);") > 0 &&
+  java.indexOf("info.put(\"firstFrame\", nativeFirstFrame);") > 0 &&
+  java.indexOf("info.put(\"dropped\", dropped > 0 ? dropped : 0);") > 0 &&
+  src.indexOf("t(\"diag_exo_frames\")") > 0 &&
+  src.indexOf("t(\"diag_exo_dropped\")") > 0 &&
+  src.indexOf("diag_exo_frames: \"klatki na obrazie\"") > 0 &&
+  src.indexOf("diag_exo_frames: \"frames on screen\"") > 0 &&
+  src.indexOf("diag_exo_dropped: \"zgubione klatki\"") > 0 &&
+  src.indexOf("diag_exo_dropped: \"dropped frames\"") > 0);
 check("odtwarzacz systemowy: odtwarzacz odbiornika jest w paczce Androida (takze HLS)",
   gradle.indexOf("androidx.media3:media3-exoplayer:$media3Version") > 0 &&
   gradle.indexOf("androidx.media3:media3-exoplayer-hls:$media3Version") > 0 &&

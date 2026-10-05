@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.7";
+  var APP_VERSION = "2.1.8";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -479,6 +479,8 @@
     diag_exo_buffer: "prowadzi go odtwarzacz systemowy",
     diag_exo_start: "oddaję kanał odtwarzaczowi systemowemu",
     diag_native_player: "odtwarzacz systemowy (ExoPlayer)",
+    diag_exo_frames: "klatki na obrazie",
+    diag_exo_dropped: "zgubione klatki",
     epg_none: "Brak danych EPG dla tego kanału.",
     archive_day_today: "Dziś", archive_day_yesterday: "Wczoraj", archive_day_before: "Przedwczoraj",
     archive_limited: "pokazano {shown} z {total}",
@@ -756,6 +758,8 @@
     diag_exo_buffer: "the system player keeps it",
     diag_exo_start: "handing the channel to the system player",
     diag_native_player: "system player (ExoPlayer)",
+    diag_exo_frames: "frames on screen",
+    diag_exo_dropped: "dropped frames",
     diag_encrypted: "encrypted (EXT-X-KEY)", diag_variants: "variants",
     epg_none: "No EPG data for this channel.",
     archive_day_today: "Today", archive_day_yesterday: "Yesterday", archive_day_before: "2 days ago",
@@ -3883,7 +3887,14 @@
     if (native) {
       lines.push(" " + t("diag_native_player") + ": media3 " + String(native.media3) +
         " · API " + (native.api | 0) +
-        " · HEVC: " + (native.hevc ? t("diag_yes") : t("diag_no")));
+        " · HEVC: " + (native.hevc ? t("diag_yes") : t("diag_no")) +
+        /* Nazwa dekodera, fakt dotarcia klatki na obraz i liczba zgubionych klatek
+           rozstrzygają, czy brak obrazu to wina dekodera, czy warstwy obrazu
+           (patrz nativeInfo w MainActivity). Liczone dla ostatniej próby kanału. */
+        (native.decoder ? " · " + String(native.decoder) : "") +
+        " · " + t("diag_exo_frames") + ": " +
+        (native.firstFrame ? t("diag_yes") : t("diag_no")) +
+        " · " + t("diag_exo_dropped") + ": " + (native.dropped | 0));
     }
     return lines;
   }

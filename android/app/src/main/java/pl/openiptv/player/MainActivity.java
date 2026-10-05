@@ -3,13 +3,14 @@ package pl.openiptv.player;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.graphics.Color;
+import android.graphics.SurfaceTexture;
 import android.media.MediaCodec;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.KeyEvent;
-import android.view.SurfaceView;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -31,6 +32,7 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 
 import com.getcapacitor.Bridge;
@@ -50,7 +52,15 @@ public class MainActivity extends BridgeActivity {
 
     /* ---- odtwarzacz systemowy (patrz ODTWARZACZ NATYWNY niżej) ---- */
     private ExoPlayer player;
-    private SurfaceView surfaceView;
+    private TextureView videoView;
+    /* Liczby z ostatniej próby obrazu systemowego (patrz nativeInfo): nazwa
+       użytego dekodera, klatki zgubione i fakt dotarcia klatki na obraz. Dopiero
+       one odróżniają „dekoder nie nadąża” od „klatki nie dochodzą na ekran” —
+       a to dwie różne naprawy (patrz diagCodecLines w app.js). */
+    private volatile String nativeDecoder = "";
+    private volatile int nativeDroppedSeen = 0;
+    private volatile int nativeDroppedBase = 0;
+    private volatile boolean nativeFirstFrame = false;
     private DefaultHttpDataSource.Factory httpFactory;
     private boolean nativeMuted = false;
     /* Stan dla app.js czytany przez most nativeState() — most chodzi na własnym
@@ -188,6 +198,14 @@ public class MainActivity extends BridgeActivity {
                         info.put("media3", MediaLibraryInfo.VERSION);
                         info.put("api", Build.VERSION.SDK_INT);
                         info.put("hevc", hasHevcDecoder());
+                        /* Liczby z ostatniej próby obrazu systemowego: który dekoder
+                           ją prowadził, czy jakakolwiek klatka doszła na obraz i ile
+                           klatek wypadło. Bez nich nie da się odróżnić „dekoder nie
+                           nadąża” od „klatek nie widać” (patrz diagCodecLines). */
+                        info.put("decoder", nativeDecoder);
+                        info.put("firstFrame", nativeFirstFrame);
+                        int dropped = nativeDroppedSeen - nativeDroppedBase;
+                        info.put("dropped", dropped > 0 ? dropped : 0);
                         return info.toString();
                     } catch (Exception error) {
                         return "";
@@ -307,10 +325,22 @@ public class MainActivity extends BridgeActivity {
        który rozbiera TS/HLS w kodzie natywnym i rysuje klatki bezpośrednio na
        warstwie sprzętowej.
 
-       Dlatego obraz z tego odtwarzacza leci POD stroną: SurfaceView jest pierwszym
+       Dlatego obraz z tego odtwarzacza leci POD stroną: warstwa obrazu jest pierwszym
        dzieckiem okna (czyli pod WebView), a WebView i strona są przezroczyste tam,
        gdzie jest obraz (app.js dodaje klasę „exo-player” — patrz styles.css). Cały
        interfejs — pasek, EPG, panel diagnostyki — rysuje się nad obrazem jak dotąd.
+
+       Warstwę obrazu rysujemy przez TextureView, a nie SurfaceView (2.1.8). Powód
+       jest zmierzony, nie teoretyczny: na telewizorze, na którym 2.1.6 pokazał sam
+       dźwięk, także element <video> w WebView zostawał czarny, dopóki nie wymusiliśmy
+       przejścia klatek przez kompozytor GPU (patrz „video-layer-fix” w styles.css).
+       Klatki ExoPlayera na SurfaceView idą płaszczyzną sprzętową obrazu — czyli
+       dokładnie tą drogą, która na tym odbiorniku nie działa — więc TextureView
+       przenosi je na tę samą drogę, którą idą już klatki <video>. Kosztuje to jedno
+       kopiowanie klatki przez GPU, więc gdyby 4K miało przez to gubić klatki, panel
+       diagnostyki pokaże to liczbami (nativeInfo → „dropped”) i wtedy wracamy do
+       SurfaceView, ale z przezroczystym oknem. Rozstrzygać ma pomiar, nie wiara w
+       jedną z dróg.
 
        Most (OpenIptvNative) jest ten sam co dla przycisku „Wyjdź”: playNative(),
        stopNative(), setNativePlaying(), setNativeMuted(), nativeState(),
@@ -326,14 +356,39 @@ public class MainActivity extends BridgeActivity {
             if (webView == null || root == null) return;
 
             /* Warstwa pod stroną: obraz systemowy, domyślnie schowany. */
-            surfaceView = new SurfaceView(this);
-            surfaceView.setLayoutParams(new FrameLayout.LayoutParams(
+            videoView = new TextureView(this);
+            videoView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.CENTER));
-            surfaceView.setBackgroundColor(Color.BLACK);
-            surfaceView.setVisibility(View.GONE);
-            root.addView(surfaceView, 0);
+            videoView.setBackgroundColor(Color.BLACK);
+            videoView.setVisibility(View.GONE);
+            /* Powierzchnia obrazu powstaje dopiero wtedy, gdy warstwa jest widoczna
+               i ułożona — dlatego oddajemy ją odtwarzaczowi tutaj, a nie raz przy
+               starcie aplikacji (patrz też startNative). */
+            videoView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+                @Override
+                public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
+                    if (player != null) player.setVideoTextureView(videoView);
+                }
+
+                @Override
+                public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
+                    /* rozmiar powierzchni nie zmienia obrazu — klatkę skaluje
+                       odtwarzacz, tak samo jak przy SurfaceView */
+                }
+
+                @Override
+                public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+                    if (player != null) player.clearVideoSurface();
+                    return true;
+                }
+
+                @Override
+                public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+                }
+            });
+            root.addView(videoView, 0);
 
             /* Strona musi być przezroczysta, inaczej zasłoniłaby obraz. */
             webView.setBackgroundColor(Color.TRANSPARENT);
@@ -359,7 +414,9 @@ public class MainActivity extends BridgeActivity {
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(httpFactory))
                 .build();
             player.setAudioAttributes(AudioAttributes.DEFAULT, true);
-            player.setVideoSurfaceView(surfaceView);
+            /* Powierzchnia obrazu może już istnieć (warstwa była widoczna, zanim
+               powstał odtwarzacz) — wtedy przypinamy ją od razu. */
+            if (videoView.isAvailable()) player.setVideoTextureView(videoView);
             player.addListener(new Player.Listener() {
                 @Override
                 public void onPlaybackStateChanged(int state) {
@@ -371,6 +428,15 @@ public class MainActivity extends BridgeActivity {
                 @Override
                 public void onIsPlayingChanged(boolean playing) {
                     emitNative(playing ? "playing" : "paused", null, 0, 0);
+                }
+
+                @Override
+                public void onRenderedFirstFrame() {
+                    /* Klatka doszła na powierzchnię obrazu. Razem z licznikiem
+                       zgubionych klatek rozstrzyga to, czy brak obrazu to wina
+                       dekodera (klatek nie ma), czy warstwy (klatki są, ale ich nie
+                       widać) — patrz nativeInfo i diagCodecLines w app.js. */
+                    nativeFirstFrame = true;
                 }
 
                 @Override
@@ -386,21 +452,47 @@ public class MainActivity extends BridgeActivity {
                     MainActivity.this.stopNative();
                 }
             });
+            /* Liczby prosto z dekodera: nazwa użytego dekodera sprzętowego i klatki,
+               które po drodze wypadły. Bez nich „brak obrazu” da się tylko zgadywać
+               (patrz nativeInfo → decoder/dropped/firstFrame). */
+            player.addAnalyticsListener(new AnalyticsListener() {
+                @Override
+                public void onVideoDecoderInitialized(AnalyticsListener.EventTime eventTime,
+                                                      String decoderName,
+                                                      long initializationDurationMs) {
+                    nativeDecoder = decoderName != null ? decoderName : "";
+                }
+
+                @Override
+                public void onDroppedVideoFrames(AnalyticsListener.EventTime eventTime,
+                                                 int droppedFrames,
+                                                 long elapsedMs) {
+                    nativeDroppedSeen = droppedFrames;
+                }
+            });
         } catch (Exception ignored) {
             /* Brak warstwy natywnej nie może blokować aplikacji — strona ma swoje
                drogi odtwarzania (patrz buildSourceQueue w app.js). */
             player = null;
-            surfaceView = null;
+            videoView = null;
         }
     }
 
     private void startNative(String url, String userAgent) {
-        if (player == null || surfaceView == null || url == null || url.isEmpty()) return;
+        if (player == null || videoView == null || url == null || url.isEmpty()) return;
         try {
             if (httpFactory != null && userAgent != null && !userAgent.isEmpty()) {
                 httpFactory.setUserAgent(userAgent);
             }
-            surfaceView.setVisibility(View.VISIBLE);
+            /* Liczniki liczymy od nowa dla każdej próby — panel diagnostyki ma
+               pokazywać ten kanał, a nie całą sesję odtwarzacza. */
+            nativeDecoder = "";
+            nativeFirstFrame = false;
+            nativeDroppedBase = nativeDroppedSeen;
+            /* Warstwa musi być widoczna, zanim powstanie jej powierzchnia — inaczej
+               odtwarzacz dostaje obraz dopiero przy kolejnym wejściu na kanał. */
+            videoView.setVisibility(View.VISIBLE);
+            if (videoView.isAvailable()) player.setVideoTextureView(videoView);
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             player.setMediaItem(MediaItem.fromUri(Uri.parse(url)));
             player.setVolume(nativeMuted ? 0f : 1f);
@@ -422,7 +514,7 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception ignored) {
         }
         try {
-            if (surfaceView != null) surfaceView.setVisibility(View.GONE);
+            if (videoView != null) videoView.setVisibility(View.GONE);
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } catch (Exception ignored) {
         }

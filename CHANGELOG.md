@@ -20,6 +20,14 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.8] — 2026-10-05
+
+### Dodano
+- **Panel diagnostyki pokazuje użyty dekoder obrazu i klatki** — wiersz odtwarzacza systemowego mówi teraz, który dekoder prowadzi kanał, czy klatka doszła na obraz i ile klatek zgubiono, więc „dźwięk jest, obrazu nie ma” przestaje być zgadywaniem.
+
+### Poprawiono
+- **„Odtwarzacz systemowy (beta)” znowu pokazuje obraz** — klatki idą kompozytorem ekranu, czyli tą samą drogą co obraz pozostałych dróg, a nie sprzętową płaszczyzną obrazu, na której część odbiorników zostawiała czarny ekran z samym dźwiękiem.
+
 ## [2.1.7] — 2026-10-05
 
 ### Poprawiono
