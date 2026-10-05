@@ -1384,7 +1384,7 @@ check("kanal 4K nie jest restartowany w polowie wczytywania (budziki patrza na r
   src.indexOf("if (Date.now() - state.lastActivityAt >= STREAM_STALL) return false;") > 0 &&
   src.indexOf("video.addEventListener(\"progress\", noteStreamActivity);") > 0 &&
   src.indexOf("if (streamStillComing()) { armStartWatchdog(token); return; }") > 0 &&
-  src.indexOf("if (streamStillComing()) { armPictureWatchdog(token); return; }") > 0 &&
+  src.indexOf("if (streamStillComing()) { armPictureWatchdogIn(token, PICTURE_TIMEOUT); return; }") > 0 &&
   src.indexOf("if (!state.pictureRetried && !videoIsUhd() && !state.uhdSeen && applyVideoLayerFix(true)) {") > 0 &&
   src.indexOf("state.entryWaitStart = Date.now();\n    state.lastActivityAt = Date.now();") > 0);
 
@@ -1402,7 +1402,7 @@ const codePicture = src.slice(picStart, src.lastIndexOf("\n\n", picEnd) + 2);
    ustawien, kolejka budzikow wywolywana recznie (tak jakby plynal czas) */
 function pictureHarness(o) {
   o = o || {};
-  const calls = { errors: [], started: [], next: [], saves: 0, pending: [], destroyed: 0 };
+  const calls = { errors: [], started: [], next: [], saves: 0, pending: [], destroyed: 0, notes: [] };
   /* obraz: 720p (jest / nie ma), 4K, albo kanał bez metadanych (dopiero się łączy) */
   const video = {
     videoWidth: o.uhd ? 3840 : (o.picture ? 1280 : 0),
@@ -1431,6 +1431,9 @@ function pictureHarness(o) {
       /* jedna próba: od kiedy trwa i kiedy strumień ostatnio naprawdę coś dociągnął */
       entryWaitStart: o.waitStart === undefined ? 0 : o.waitStart,
       lastActivityAt: o.activity === undefined ? 0 : o.activity,
+      /* od kiedy gra sam dźwięk w tej próbie (zdarzenie „playing”) — od tego
+         liczy się twardy budżet „dźwięk bez obrazu” (AUDIO_ONLY_TIMEOUT) */
+      audioStartedAt: o.audioStartedAt === undefined ? 0 : o.audioStartedAt,
       sources: o.sources || [{ engine: "native", url: "http://s/x.ts" }, { engine: "mse", url: "http://s/x.ts" }],
       sourceIndex: o.sourceIndex === undefined ? 0 : o.sourceIndex
     },
@@ -1450,6 +1453,7 @@ function pictureHarness(o) {
     },
     saveSettings: function () { calls.saves++; },
     showPlayerError: function (message) { calls.errors.push(message); },
+    diagNote: function (note) { calls.notes.push(note); },
     startSourceEntry: function (entry) { calls.started.push(entry); },
     nextSourceEntry: function (message, delay, silent, maxCycles, finalHint) {
       calls.next.push({ message: message, maxCycles: maxCycles, finalHint: finalHint });
@@ -1602,6 +1606,128 @@ check("uruchomione: 4K z wymiarami klatki jest dla budzika obrazem (nic nie zmie
   ph.classes.length === 0 && ph.calls.next.length === 0 && ph.calls.started.length === 0,
   JSON.stringify({ classes: ph.classes, next: ph.calls.next }));
 
+/* Dźwięk bez ANI JEDNEJ klatki ma twardy budżet (AUDIO_ONLY_TIMEOUT), liczony od
+   zdarzenia „playing”. Kanał 4K HEVC grał tak bez końca (80 s nic nie zmieniło),
+   a dociąganie danych przy czarnym ekranie nic tu nie naprawi — dlatego ruch
+   w strumieniu tego czasu NIE przedłuża. */
+check("dzwiek bez obrazu: budzet liczy sie od zdarzenia „playing”, a ruch w strumieniu go nie przedluza",
+  src.indexOf("var AUDIO_ONLY_TIMEOUT = 8000;") > 0 &&
+  src.indexOf("state.audioStartedAt = state.audioStartedAt || Date.now();") > 0 &&
+  src.indexOf("if (!notePicture()) armPictureWatchdog();") > 0 &&
+  src.indexOf("var audioSince = state.audioStartedAt || state.entryWaitStart || 0;") > 0 &&
+  src.indexOf("if (audioPlaying && audioFor >= AUDIO_ONLY_TIMEOUT) {") > 0 &&
+  src.indexOf("armPictureWatchdogIn(token, AUDIO_ONLY_TIMEOUT - audioFor);") > 0 &&
+  src.indexOf("state.audioStartedAt = 0;") > 0);
+
+const AUDIO_ONLY_MS = 8000;
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 2000, activity: NOW4K - 500,
+  readyState: 2, audioStartedAt: NOW4K - 8100 });
+check("uruchomione: twardy budzet dzwieku bez obrazu to 8 s",
+  ph.api.AUDIO_ONLY_TIMEOUT === AUDIO_ONLY_MS, String(ph.api.AUDIO_ONLY_TIMEOUT));
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: dzwiek bez obrazu po 8 s oddaje kanal nastepnemu sposobowi odtwarzania",
+  ph.calls.next.length === 1 && ph.calls.next[0].maxCycles === 0 &&
+  ph.calls.next[0].finalHint === "<err_no_picture_hint>" &&
+  ph.calls.next[0].message === "<err_no_picture>" &&
+  ph.classes.length === 0,
+  JSON.stringify({ next: ph.calls.next, classes: ph.classes }));
+check("uruchomione: dziennik panelu notuje, przez ile sekund gral sam dzwiek",
+  ph.calls.notes.length === 1 && ph.calls.notes[0] === "<diag_no_picture_advance>",
+  JSON.stringify(ph.calls.notes));
+
+/* przed upływem budżetu próba jest nadal pilnowana (i przedłużana, dopóki coś
+   przychodzi) — twardy budżet nie może ucinać kanału, który dopiero ruszył */
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 2000, activity: NOW4K - 500,
+  readyState: 2, audioStartedAt: NOW4K - 7900, layerFix: true });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: przed uplywem 8 s sam dzwiek jest jeszcze pilnowany",
+  ph.calls.next.length === 0 && ph.calls.started.length === 0 &&
+  ph.calls.errors.length === 0 && ph.api.state.pictureTimer !== null,
+  JSON.stringify({ next: ph.calls.next, timer: ph.api.state.pictureTimer }));
+
+/* dźwięk, który ruszył dawno temu, ale próba dopiero się wczytuje: liczy się czas
+   dźwięku, nie wiek próby — inaczej kanał byłby ucinany w połowie wczytywania */
+ph = pictureHarness({ nowMs: NOW4K, waitStart: NOW4K - 500, activity: NOW4K - 100,
+  readyState: 2, audioStartedAt: NOW4K - 8100 });
+ph.api.armPictureWatchdog(7);
+ph.fire();
+check("uruchomione: liczy sie czas dzwieku, a nie wiek proby (8 s dzwieku konczy probe)",
+  ph.calls.next.length === 1 && ph.calls.started.length === 0,
+  JSON.stringify(ph.calls.next));
+
+/* Wyczerpanie kolejki prob: dzwiek nie moze grac dalej pod komunikatem „kanal nie
+   dziala”. Sprawdzamy ostatni krok kolejki na wycietej funkcji nextSourceEntry. */
+const nextStart = src.indexOf("function nextSourceEntry(message, delay, silent, maxCycles, finalHint) {");
+const nextMarker = src.indexOf("/* ================  „OSTATNIO OGLĄDANE”");
+if (nextStart < 0 || nextMarker <= nextStart) throw new Error("Nie znalazlem nextSourceEntry w app.js");
+const codeNext = src.slice(nextStart, src.lastIndexOf("\n\n", nextMarker));
+
+function nextHarness(o) {
+  o = o || {};
+  const calls = { errors: [], notes: [], destroyed: 0, paused: 0, timers: [], started: [] };
+  const video = { paused: false, pause: function () { calls.paused++; this.paused = true; } };
+  const sandbox = {
+    settings: { retryAttempts: "2" },
+    state: {
+      watchChannel: { name: "TVN" },
+      sources: o.sources || [
+        { engine: "native", url: "http://s/x.m3u8" },
+        { engine: "hls", url: "http://s/x.m3u8" },
+        { engine: "mse", url: "http://s/x.m3u8", hls: true }
+      ],
+      sourceIndex: o.sourceIndex === undefined ? 2 : o.sourceIndex,
+      cycle: o.cycle === undefined ? 0 : o.cycle,
+      retryTimer: null
+    },
+    t: function (key) { return "<" + key + ">"; },
+    $: function (id) { return id === "video" ? video : null; },
+    maybeAutoDiagnose: function () {},
+    diagNote: function (note) { calls.notes.push(note); },
+    showPlayerError: function (message) { calls.errors.push(message); },
+    startSourceEntry: function (entry) { calls.started.push(entry); },
+    destroyEngine: function () { calls.destroyed++; },
+    setTimeout: function (fn) { calls.timers.push(fn); return 1; },
+    clearTimeout: function () {}
+  };
+  run(codeNext, sandbox);
+  return {
+    api: sandbox, calls: calls, video: video,
+    fire: function () { calls.timers.splice(0).forEach(function (fn) { fn(); }); }
+  };
+}
+
+/* ostatni wpis kolejki padl: obraz gasnie, a komunikat mowi, co zrobic */
+let nh = nextHarness({});
+nh.api.nextSourceEntry("<err_no_picture>", 0, false, 0, "<err_no_picture_hint>");
+check("wyczerpana kolejka: obraz gasnie zamiast grac sam dzwiek pod komunikatem",
+  nh.calls.destroyed === 1 && nh.calls.paused === 1 && nh.video.paused === true &&
+  nh.calls.timers.length === 0 && nh.calls.started.length === 0,
+  JSON.stringify({ destroyed: nh.calls.destroyed, paused: nh.calls.paused, timers: nh.calls.timers.length }));
+check("wyczerpana kolejka: komunikat podaje powod, rade i nie liczy „prob ponowienia”",
+  nh.calls.errors.length === 1 &&
+  nh.calls.errors[0] === "<err_no_picture>\n<err_no_picture_hint>\n<back_hint>",
+  JSON.stringify(nh.calls.errors));
+check("wyczerpana kolejka: dziennik panelu notuje oddanie kanalu",
+  nh.calls.notes.join(",") === "<diag_engine_fail>,<diag_giveup_audio>",
+  JSON.stringify(nh.calls.notes));
+
+/* zanim kolejka sie wyczerpie, nastepny sposob odtwarzania (czytnik HLS→TS) ma isc
+   jako pierwszy i od razu poinformowac, ze probujemy wlasnie jego */
+nh = nextHarness({ sourceIndex: 1, cycle: 0 });
+nh.api.nextSourceEntry("<err_no_picture>", 900, false, 0, "<err_no_picture_hint>");
+check("wyczerpana proba: kolejka idzie do czytnika HLS→TS z wlasnym komunikatem",
+  nh.calls.errors.length === 1 &&
+  nh.calls.errors[0] === "<err_no_picture>\n<retry_engine_mse_hls>" &&
+  nh.calls.timers.length === 1 && nh.calls.destroyed === 0 && nh.calls.paused === 0,
+  JSON.stringify(nh.calls.errors));
+nh.fire();
+check("wyczerpana proba: nastepny sposob odtwarzania startuje bez czekania na pilota",
+  nh.calls.started.length === 1 && nh.calls.started[0].engine === "mse" &&
+  nh.calls.started[0].hls === true,
+  JSON.stringify(nh.calls.started));
+
 check("kanal 4K: rozpoznany z metadanych i z manifestu HLS, a warstwa obrazu go nie dotyczy",
   src.indexOf("if (videoIsUhd() && noteUhd()) return;") > 0 &&
   src.indexOf("if (manifestIsUhd(data) && noteUhd()) return;") > 0 &&
@@ -1716,9 +1842,26 @@ check("uruchomione: zapamietany MSE idzie na poczatek kolejki nastepnego kanalu"
   qMse.map(function (e) { return e.engine; }).indexOf("native") === 1,
   JSON.stringify(qMse.map(function (e) { return e.engine; })));
 queueBox.settings.engineHint = "hls";
+const qHls = engines("http://s/x.m3u8");
 check("uruchomione: zapamietany HLS idzie na poczatek tylko dla wlasnego adresu (.m3u8)",
-  engines("http://s/x.m3u8")[0] === "hls" && engines("http://s/x.m3u8").length === 2,
-  JSON.stringify(engines("http://s/x.m3u8")));
+  qHls[0] === "hls" && qHls.length === 3, JSON.stringify(qHls));
+/* Kanał z playlisty ma jeszcze jedną próbę na końcu: playlistę czyta własny
+   czytnik, a strumień rozbiera mpegts.js (patrz createHlsTsLoader). Bez tego
+   wpisu kanał 4K HEVC kończył kolejkę z samym dźwiękiem. */
+check("uruchomione: .m3u8 konczy kolejke wlasnym czytnikiem HLS→TS (mpegts.js + hls:true)",
+  qHls[2] === "mse" && queueBox.buildSourceQueue("http://s/x.m3u8")[2].hls === true &&
+  queueBox.buildSourceQueue("http://s/x.m3u8")[2].url === "http://s/x.m3u8",
+  JSON.stringify(queueBox.buildSourceQueue("http://s/x.m3u8")));
+queueBox.settings.engineHint = "mse";
+const qMsHls = queueBox.buildSourceQueue("http://s/x.m3u8");
+check("uruchomione: zapamietany MSE dla playlisty wybiera wlasnie czytnik HLS→TS",
+  qMsHls[0].engine === "mse" && qMsHls[0].hls === true &&
+  qMsHls.map(function (e) { return e.engine; }).join(",") === "mse,native,hls",
+  JSON.stringify(qMsHls.map(function (e) { return e.engine; })));
+check("uruchomione: kanal .ts nie dostaje wpisu z czytnikiem playlisty (nie ma czego czytac)",
+  qPlain.join(",") === "native,mse,native,hls" &&
+  qMsHls.length === 3 && qMsHls.every(function (e) { return e.hls !== true || e.engine === "mse"; }));
+queueBox.settings.engineHint = "bogus";
 check("uruchomione: zapasowy .m3u8 nie wypycha sprawdzonego adresu .ts (kanal 4K szedl na HLS)",
   engines("http://s/x.ts").join(",") === "native,mse,native,hls",
   JSON.stringify(engines("http://s/x.ts")));
@@ -1753,6 +1896,208 @@ check("hls.js: pojedynczy zepsuty fragment nie konczy proby (strumien moze sie p
   cannotBox.hlsCannotPlay({ details: "fragParsingError", reason: "Found no media in msn 12 of level \"x\"" }) === false &&
   cannotBox.hlsCannotPlay({}) === false,
   String(cannotBox.hlsCannotPlay({ reason: "Found no media in msn 12" })));
+
+/* --- 26. kanal z playlisty (4K HEVC): wlasny czytnik HLS→TS ------------------
+   Kanaly 4K bywaja nadawane tylko jako .m3u8 z HEVC w TS. Na Androidzie nie ma
+   tego czym odtworzyc: hls.js nie rozbiera HEVC, a <video> nie czyta playlisty,
+   wiec zostawal sam dzwiek na czarnym ekranie. Aplikacja musi sama przeczytac
+   playliste, pobrac odcinki i podac je mpegts.js jako jeden ciagly strumien TS
+   (config.customLoader wg umowy z mpegts.js 1.7.3). Sprawdzamy te umowe, rozbior
+   playlisty, brak dublowania odcinkow i polaczenie z kolejka prob. */
+check("kanal z playlisty: mpegts.js dostaje wlasny czytnik (customLoader + BaseLoader)",
+  src.indexOf("function createHlsTsLoader(lib, videoRef)") > 0 &&
+  src.indexOf("var self = lib.BaseLoader.call(this, \"hls-ts-loader\") || this;") > 0 &&
+  src.indexOf("FeederLoader.prototype = Object.create(lib.BaseLoader.prototype);") > 0 &&
+  src.indexOf("FeederLoader.prototype.open = function (dataSource, range) {") > 0 &&
+  src.indexOf("FeederLoader.prototype.abort = function () {") > 0 &&
+  src.indexOf("config.customLoader = createHlsTsLoader(window.mpegts, function () { return $(\"video\"); });") > 0 &&
+  src.indexOf("if (entry.hls) {") > 0);
+check("kanal z playlisty: odcinki ida do odtwarzacza jako rosnacy ciagly strumien TS",
+  src.indexOf("self._onDataArrival(chunk, self._offset, self._offset + chunk.byteLength);") > 0 &&
+  src.indexOf("self._offset += chunk.byteLength;") > 0 &&
+  src.indexOf("self._status = lib.LoaderStatus.kBuffering;") > 0 &&
+  src.indexOf("this._status = lib.LoaderStatus.kComplete;") > 0 &&
+  src.indexOf("if (this._onComplete) this._onComplete(0, this._offset);") > 0);
+check("kanal z playlisty: nieudany odcinek wraca na poczatek kolejki (dziura w TS rozsypuje obraz)",
+  src.indexOf("FeederLoader.prototype._segmentFailed = function (url, reason) {") > 0 &&
+  src.indexOf("this._pending.unshift(url);") > 0 &&
+  src.indexOf("this._segmentFails <= FEEDER_SEGMENT_RETRIES") > 0 &&
+  src.indexOf("this._fail(t(\"err_feeder_segment\", { reason: reason }))") > 0);
+check("kanal z playlisty: porazka czytnika konczy te probe, a nie cala aplikacje",
+  src.indexOf("FeederLoader.prototype._fail = function (message) {") > 0 &&
+  src.indexOf("this._status = lib.LoaderStatus.kError;") > 0 &&
+  src.indexOf("this._onError(lib.LoaderErrors.EXCEPTION, { code: -1, msg: String(message) });") > 0 &&
+  src.indexOf("diagNote(t(\"diag_feeder_failed\", { reason: String(message) }));") > 0);
+check("kanal z playlisty: playlista czytana na nowo, a wyslane odcinki nie dubluja sie",
+  src.indexOf("FeederLoader.prototype._scheduleRefresh = function () {") > 0 &&
+  src.indexOf("if (this._seen[url]) continue;") > 0 &&
+  src.indexOf("Math.max(0, list.segments.length - FEEDER_LIVE_SEGMENTS)") > 0 &&
+  src.indexOf("if (this._seenCount > FEEDER_SEEN_MAX) { this._seen = {}; this._seenCount = 0; }") > 0);
+check("kanal z playlisty: obrazu nie wyprzedzamy (bufor na zywo) i znamy powody odmowy",
+  src.indexOf("FeederLoader.prototype._bufferedAhead = function (video) {") > 0 &&
+  src.indexOf("if (video && this._bufferedAhead(video) > FEEDER_BUFFER_AHEAD) {") > 0 &&
+  src.indexOf("err_feeder_fmp4:") > 0 && src.indexOf("err_feeder_encrypted:") > 0 &&
+  src.indexOf("err_feeder_variants:") > 0 && src.indexOf("err_feeder_empty:") > 0);
+
+/* Czytnik wyciagniety z app.js (nie skopiowany): caly blok z parserem playlisty.
+   Atrapy `t`/`diagNote`/`httpGet` sa potrzebne tylko tym metodom, ktore wolamy
+   nizej pojedynczo — bez nich siegnełyby do nieistniejacych nazw. */
+const feederStart = src.indexOf("var FEEDER_LIVE_SEGMENTS");
+const feederEnd = src.indexOf("function startMseSource(");
+if (feederStart < 0 || feederEnd <= feederStart) throw new Error("Nie znalazlem czytnika HLS→TS w app.js");
+const feederStubs = {
+  t: function (key) { return "<" + key + ">"; },
+  diagNote: function () {},
+  httpGet: function () { return Promise.resolve({}); },
+  setTimeout: function () { return 1; },
+  clearTimeout: function () {}
+};
+const feederBox = run(src.slice(feederStart, feederEnd), feederStubs);
+
+const masterList = feederBox.parseHlsPlaylist([
+  "#EXTM3U",
+  "#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS=\"avc1.640029,mp4a.40.2\"",
+  "hd/index.m3u8",
+  "#EXT-X-STREAM-INF:BANDWIDTH=32000000,RESOLUTION=3840x2160,CODECS=\"hvc1.2.4.L153,mp4a.40.2\"",
+  "uhd/index.m3u8"
+].join("\n"));
+check("czytnik HLS: playlista wariantow rozpoznana (4K to osobny poziom, nie odcinek)",
+  masterList.variants.length === 2 && masterList.variants[1].bandwidth === 32000000 &&
+  masterList.variants[1].height === 2160 && masterList.segments.length === 0,
+  JSON.stringify(masterList));
+check("czytnik HLS: atrybuty wiersza wariantu czytane takze w cudzyslowie",
+  feederBox.feederAttributes("BANDWIDTH=32000000,RESOLUTION=3840x2160,CODECS=\"hvc1.2.4.L153,mp4a.40.2\"").CODECS ===
+  "hvc1.2.4.L153,mp4a.40.2");
+
+const mediaList = feederBox.parseHlsPlaylist([
+  "#EXTM3U",
+  "#EXT-X-VERSION:3",
+  "#EXT-X-TARGETDURATION:4",
+  "#EXT-X-MEDIA-SEQUENCE:118",
+  "#EXTINF:4.000,",
+  "od118.ts",
+  "#EXTINF:4.000,",
+  "od119.ts",
+  "#EXTINF:3.960,",
+  "od120.ts"
+].join("\n"));
+check("czytnik HLS: odcinki, dlugosc odcinka i brak konca playlisty (kanal na zywo)",
+  mediaList.segments.join(",") === "od118.ts,od119.ts,od120.ts" &&
+  mediaList.targetDuration === 4 && mediaList.endList === false &&
+  mediaList.fmp4 === false && mediaList.encrypted === false && mediaList.variants.length === 0,
+  JSON.stringify(mediaList));
+check("czytnik HLS: koniec playlisty (film) i zaszyfrowany strumien sa rozpoznawane",
+  feederBox.parseHlsPlaylist("#EXTM3U\n#EXTINF:4,\nod1.ts\n#EXT-X-ENDLIST").endList === true &&
+  feederBox.parseHlsPlaylist("#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"k\"\n#EXTINF:4,\nod1.ts").encrypted === true &&
+  feederBox.parseHlsPlaylist("#EXTM3U\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:4,\nod1.ts").encrypted === false);
+check("czytnik HLS: kawalki MP4 (fMP4) sa wykrywane — mpegts.js TS ich nie rozbierze",
+  feederBox.parseHlsPlaylist("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4,\nod1.m4s").fmp4 === true);
+check("czytnik HLS: adresy wzgledne trafiaja do katalogu playlisty",
+  feederBox.feederResolveUrl("http://s:8080/live/kanal/index.m3u8?token=1", "od1.ts") === "http://s:8080/live/kanal/od1.ts" &&
+  feederBox.feederResolveUrl("http://s/live/a/index.m3u8", "/live/b/od1.ts") === "http://s/live/b/od1.ts" &&
+  feederBox.feederResolveUrl("http://s/live/a/index.m3u8", "http://c/d/od1.ts") === "http://c/d/od1.ts" &&
+  feederBox.feederResolveUrl("http://s/live/a/index.m3u8", "od1.ts") === "http://s/live/a/od1.ts",
+  feederBox.feederResolveUrl("http://s:8080/live/kanal/index.m3u8?token=1", "od1.ts"));
+check("czytnik HLS: powod odmowy jest krotki i czytelny dla czlowieka",
+  feederBox.feederReason(new Error("timeout")) === "timeout" &&
+  feederBox.feederReason(null) === "?");
+
+/* Pojedyncze metody czytnika wyciagniete z app.js — wolamy je na atrapie loadera
+   (patrz umowa customLoader w mpegts.js 1.7.3: open/abort/destroy + _onDataArrival) */
+run("var FeederLoader = function () {};", feederBox);
+function feederMethod(name) {
+  const at = src.indexOf("FeederLoader.prototype." + name + " = function");
+  if (at < 0) throw new Error("Nie znalazlem FeederLoader.prototype." + name + " w app.js");
+  const end = src.indexOf("\n    };", at);
+  if (end < 0) throw new Error("Nie znalazlem konca FeederLoader.prototype." + name);
+  vm.runInContext(src.slice(at, end + 7), feederBox);
+  return feederBox.FeederLoader.prototype[name];
+}
+
+const queueSegments = feederMethod("_queueSegments");
+function feederSeg(o) {
+  const seg = Object.create(feederBox.FeederLoader.prototype);
+  seg._playlistUrl = "http://s/live/kanal/index.m3u8";
+  seg._started = !!(o && o.started);
+  seg._endList = !!(o && o.endList);
+  seg._seen = {};
+  seg._seenCount = 0;
+  seg._pending = (o && o.pending) || [];
+  return seg;
+}
+const liveSeg = feederSeg({});
+const fiveSegments = ["od1.ts", "od2.ts", "od3.ts", "od4.ts", "od5.ts"];
+queueSegments.call(liveSeg, { segments: fiveSegments, endList: false });
+check("czytnik HLS: na zywo startujemy od ostatnich odcinkow (obraz nie zostaje z tylu)",
+  liveSeg._pending.join(",") === "http://s/live/kanal/od4.ts,http://s/live/kanal/od5.ts",
+  liveSeg._pending.join(","));
+liveSeg._started = true;
+queueSegments.call(liveSeg, { segments: fiveSegments.concat(["od6.ts"]), endList: false });
+check("czytnik HLS: po odczycie playlisty dochodzi tylko nowy odcinek (bez dublowania)",
+  liveSeg._pending.join(",") ===
+  "http://s/live/kanal/od4.ts,http://s/live/kanal/od5.ts,http://s/live/kanal/od6.ts",
+  liveSeg._pending.join(","));
+const vodSeg = feederSeg({ endList: true });
+queueSegments.call(vodSeg, { segments: ["a.ts", "b.ts"], endList: true });
+check("czytnik HLS: film z playlisty puszczamy od pierwszego odcinka (jest koniec listy)",
+  vodSeg._pending.join(",") === "http://s/live/kanal/a.ts,http://s/live/kanal/b.ts",
+  vodSeg._pending.join(","));
+
+const variantBetter = feederMethod("_variantBetter");
+check("czytnik HLS: z playlisty wariantow wybieramy najciezszy poziom (4K HEVC jest tam)",
+  masterList.variants.reduce(function (best, v) { return variantBetter.call(null, v, best) ? v : best; },
+    masterList.variants[0]).url === "uhd/index.m3u8" &&
+  variantBetter.call(null, { bandwidth: 8000000, height: 2160 }, { bandwidth: 8000000, height: 1080 }) === true &&
+  variantBetter.call(null, { bandwidth: 8000000, height: 1080 }, { bandwidth: 32000000, height: 2160 }) === false &&
+  variantBetter.call(null, { bandwidth: 8000000, height: 1080 }, { bandwidth: 8000000, height: 1080 }) === false);
+
+const segmentFailed = feederMethod("_segmentFailed");
+function failedHarness() {
+  const seg = feederSeg({});
+  const calls = { retry: [], failed: [] };
+  seg._segmentFails = 0;
+  seg._schedulePump = function (delay) { calls.retry.push(delay); };
+  seg._fail = function (message) { calls.failed.push(message); };
+  return { seg: seg, calls: calls };
+}
+const fs1 = failedHarness();
+check("czytnik HLS: nieodebrany odcinek wraca na poczatek kolejki i czeka pol sekundy",
+  segmentFailed.call(fs1.seg, "http://s/live/kanal/od3.ts", "timeout") === true &&
+  fs1.seg._pending.join(",") === "http://s/live/kanal/od3.ts" &&
+  fs1.calls.retry.join(",") === "500" && fs1.calls.failed.length === 0,
+  JSON.stringify(fs1.calls));
+segmentFailed.call(fs1.seg, "http://s/live/kanal/od3.ts", "timeout");
+check("czytnik HLS: trzecia nieudana proba odcinka konczy te probe (z powodem w komunikacie)",
+  segmentFailed.call(fs1.seg, "http://s/live/kanal/od3.ts", "timeout") === false &&
+  fs1.calls.failed.length === 1 && fs1.calls.failed[0] === "<err_feeder_segment>" &&
+  fs1.calls.retry.length === 2,
+  JSON.stringify(fs1.calls));
+
+feederMethod("_asChunk");
+vm.runInContext("var __probe = {}; var __ab = new ArrayBuffer(8); var __view = new Uint8Array(__ab, 4, 2);\n" +
+  "__probe.same = FeederLoader.prototype._asChunk.call(null, __ab) === __ab;\n" +
+  "__probe.view = (function () { var out = FeederLoader.prototype._asChunk.call(null, __view);\n" +
+  "  return out instanceof ArrayBuffer && out !== __ab && out.byteLength === 2; })();\n" +
+  "__probe.whole = FeederLoader.prototype._asChunk.call(null, new Uint8Array(__ab)) === __ab;\n" +
+  "__probe.bad = FeederLoader.prototype._asChunk.call(null, \"tekst\") === null &&\n" +
+  "  FeederLoader.prototype._asChunk.call(null, null) === null;", feederBox);
+check("czytnik HLS: odcinek idzie do mpegts.js jako ArrayBuffer (takze gdy webOS da same bajty)",
+  feederBox.__probe.same === true && feederBox.__probe.view === true &&
+  feederBox.__probe.whole === true && feederBox.__probe.bad === true,
+  JSON.stringify(feederBox.__probe));
+
+const bufferedAhead = feederMethod("_bufferedAhead");
+check("czytnik HLS: bufor liczymy od miejsca odtwarzania (na zywo nie wyprzedzamy obrazu)",
+  bufferedAhead.call(null, {
+    currentTime: 10,
+    buffered: { length: 1, start: function () { return 5; }, end: function () { return 14; } }
+  }) === 4 &&
+  bufferedAhead.call(null, { currentTime: 10, buffered: { length: 0 } }) === 0 &&
+  bufferedAhead.call(null, {}) === 0 &&
+  bufferedAhead.call(null, {
+    currentTime: 2,
+    buffered: { length: 2, start: function (i) { return i ? 100 : 0; }, end: function (i) { return i ? 120 : 4; } }
+  }) === 2);
 
 /* --- 26. panel diagnostyki obrazu (dzwiek gra, a obrazu nie ma) ----------
    Kanal 4K zostawial czarny ekran i z kanapy nie bylo widac dlaczego: dzwiek
@@ -1838,8 +2183,11 @@ check("panel otwarty recznie zostaje otwarty — nic nie otwieramy drugi raz",
 
 check("panel uzbraja sie na starcie dzwieku i przed zmiana sposobu odtwarzania",
   src.indexOf("var DIAG_AUTO_DELAY = 8000;") > 0 &&
-  src.indexOf("armDiagAuto();\n      /* Dźwięk wystartował") > 0 &&
-  src.indexOf("maybeAutoDiagnose(t(\"diag_auto\"));\n\n    var attempts = parseInt(settings.retryAttempts, 10) || 0;") > 0);
+  src.indexOf("video.addEventListener(\"playing\", function () {\n      noteStreamActivity();") > 0 &&
+  src.indexOf("armDiagAuto();\n      /* Od tego miejsca liczy się czas") > 0 &&
+  src.indexOf("if (!notePicture()) armPictureWatchdog();") > 0 &&
+  src.indexOf("maybeAutoDiagnose(t(\"diag_auto\"));") > 0 &&
+  src.indexOf("var attempts = parseInt(settings.retryAttempts, 10) || 0;") > 0);
 
 check("nowy kanal gasi budzik panelu (panel nie wchodzi w srodku wczytywania)",
   src.indexOf("clearTimeout(state.diagAutoTimer);\n    state.diagAutoTimer = null;") > 0 &&

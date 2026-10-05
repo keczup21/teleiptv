@@ -1,6 +1,6 @@
 {
   "id": "pl.openiptv.player",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "vendor": "TeleIPTV",
   "type": "web",
   "main": "index.html",

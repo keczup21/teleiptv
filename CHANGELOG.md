@@ -20,6 +20,16 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.1] — 2026-10-05
+
+### Dodano
+- **Kanał nadawany playlistą (`.m3u8`) dostał trzecią drogę do obrazu** — gdy odtwarzacze pokazują z niego sam dźwięk (4K HEVC na Fire TV), aplikacja sama pobiera odcinki playlisty i podaje je odtwarzaczowi strumienia TS; to ostatnia próba przed uznaniem kanału za nieodtwarzalny.
+
+### Poprawiono
+- **Dźwięk bez ani jednej klatki przestaje wisieć w nieskończoność** — osiem sekund od startu dźwięku to twardy budżet: po nim wymuszona warstwa obrazu, potem następny sposób odtwarzania, a na końcu zatrzymanie kanału z komunikatem, że ten telewizor odtwarza z niego sam dźwięk; dociąganie danych tego czasu nie przedłuża.
+- **Koniec odtwarzania gasi dźwięk w tle** — po wyczerpaniu sposobów odtwarzania kanał zostaje zatrzymany, więc komunikat nie idzie razem z lecącym dalej dźwiękiem, a wznowienie klawiszem odtwarzania nadal działa.
+- **Raport diagnostyki odświeża się od razu i mówi, którą drogą szedł kanał** — nowy wpis widać bez czekania na zegar, a w dzienniku jest numer próby, przyczyna jej zakończenia, czas dźwięku bez obrazu oraz to, co zdążył zrobić czytnik playlisty.
+
 ## [2.1.0] — 2026-10-04
 
 ### Dodano
