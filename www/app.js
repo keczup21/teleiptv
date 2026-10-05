@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.1";
+  var APP_VERSION = "2.1.2";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -4475,6 +4475,16 @@
          createHlsTsLoader). Pozostałe ustawienia zostają bez zmian. */
       if (entry.hls) {
         config.customLoader = createHlsTsLoader(window.mpegts, function () { return $("video"); });
+        /* Czytnik playlisty sam pilnuje, ile obrazu ma przed odtwarzaniem
+           (patrz FEEDER_BUFFER_AHEAD), więc doganianie „na żywo” z mpegts.js
+           musi tu zostać wyłączone. Dla strumienia z czytnika wygląda ono tak:
+           po każdym dołożonym odcinku odtwarzacz przeskakuje na sam koniec
+           buforu (buffered.end - 0.5 s), gotowy zapas znika i kanał w kółko
+           wpada w „Ładowanie strumienia…”: obraz idzie klatka po klatce, choć
+           strumień jest cały czas dociągany. Zapas czytnika jest stabilny
+           (odcinki idą jeden po drugim, bez dziur), więc nie ma czego doganiać —
+           a nadmiar i tak odcina sam czytnik. */
+        config.liveBufferLatencyChasing = false;
       }
       var player;
       try {
@@ -4615,8 +4625,8 @@
       /* Ostatnia deska ratunku dla kanału 4K HEVC: playlistę czyta własny czytnik,
          a strumień rozbiera mpegts.js (patrz createHlsTsLoader). hls.js takiego
          kodeka nie ruszy, a <video> nie czyta playlisty wcale — bez tego wpisu
-         kolejka kończyła się na samym dźwięku. Ten sam adres co wyżej, więc
-         zapamiętany silnik (preferEngine) nadal wybiera między nimi świadomie. */
+         kolejka kończyła się na samym dźwięku. Ten wpis zostaje na końcu kolejki
+         także dla zapamiętanego silnika (patrz preferEngine). */
       queue.push({ engine: "mse", url: primaryUrl, hls: true });
     } else if (tsLike) {
       queue.push({ engine: "mse", url: primaryUrl });
@@ -4641,10 +4651,22 @@
      „kanał.m3u8”) to inny strumień — nie wiadomo, czy w ogóle istnieje i co
      nadaje, a kanał 4K potrafi w nim trafić na HEVC, którego hls.js nie
      rozbierze. Pamięć po innym kanale nie może więc wypychać go przed adres,
-     który dla tego kanału naprawdę działa. */
+     który dla tego kanału naprawdę działa.
+
+     Wyjątkiem jest czytnik playlisty (wpis z „hls: true”): on zostaje tam,
+     gdzie go postawiono, czyli na końcu kolejki — patrz niżej. */
   function preferEngine(queue, hint) {
     if (hint !== "mse" && hint !== "hls") return queue;
     for (var i = 1; i < queue.length; i++) {
+      /* Czytnik playlisty (wpis z „hls: true”) zostaje na końcu kolejki. Z
+         nazwy wygląda jak zwykłe MSE, więc zapamiętany MSE wybierał właśnie
+         jego — ale to zupełnie inna droga: sam pobiera odcinki playlisty i
+         trzyma kilkanaście sekund obrazu przed odtwarzaniem. Kanał nadawany
+         zwykłym strumieniem gra lepiej natywnie albo przez HLS, a dla kanału
+         z playlisty ta próba i tak jest ostatnia — dzięki temu zapamiętany
+         sposób odtwarzania nie ciągnie do czytnika każdego kanału z playlisty
+         (także tych HD, które nie mają z HEVC nic wspólnego). */
+      if (queue[i].hls) continue;
       if (queue[i].engine === hint && queue[i].url === queue[0].url) {
         var entry = queue.splice(i, 1)[0];
         queue.unshift(entry);

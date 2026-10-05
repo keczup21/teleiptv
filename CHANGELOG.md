@@ -20,6 +20,12 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.2] — 2026-10-05
+
+### Poprawiono
+- **Kanał z playlisty gra płynnie, bez „Ładowania strumienia…”** — dla kanału czytanego z playlisty odtwarzacz strumienia TS nie dogania już obrazu „na żywo”: po każdym dołożonym odcinku przeskakiwał na sam koniec buforu, przez co gotowy zapas znikał, a obraz szedł klatka po klatce.
+- **Zapamiętany odtwarzacz TS nie wybiera już czytnika playlisty** — kanały z playlistą, które mają zwykły strumień (także HD), startują natywnie albo przez HLS, a czytanie playlisty zostaje ostatnią próbą, tak jak było przewidziane.
+
 ## [2.1.1] — 2026-10-05
 
 ### Dodano

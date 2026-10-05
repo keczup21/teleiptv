@@ -1854,9 +1854,13 @@ check("uruchomione: .m3u8 konczy kolejke wlasnym czytnikiem HLS→TS (mpegts.js 
   JSON.stringify(queueBox.buildSourceQueue("http://s/x.m3u8")));
 queueBox.settings.engineHint = "mse";
 const qMsHls = queueBox.buildSourceQueue("http://s/x.m3u8");
-check("uruchomione: zapamietany MSE dla playlisty wybiera wlasnie czytnik HLS→TS",
-  qMsHls[0].engine === "mse" && qMsHls[0].hls === true &&
-  qMsHls.map(function (e) { return e.engine; }).join(",") === "mse,native,hls",
+/* Zapamiętany MSE nie może wybierać czytnika playlisty: dla kanału z playlisty
+   to ostatnia próba (wolna, z zapasem obrazu przed odtwarzaniem), a wybierana
+   dla każdego kanału z playlisty kazała nią iść także kanałom HD, które mają
+   zwykły strumień (patrz preferEngine). */
+check("uruchomione: zapamietany MSE nie wybiera czytnika playlisty (zostaje ostatnia proba)",
+  qMsHls.map(function (e) { return e.engine; }).join(",") === "native,hls,mse" &&
+  qMsHls[0].hls !== true && qMsHls[2].hls === true,
   JSON.stringify(qMsHls.map(function (e) { return e.engine; })));
 check("uruchomione: kanal .ts nie dostaje wpisu z czytnikiem playlisty (nie ma czego czytac)",
   qPlain.join(",") === "native,mse,native,hls" &&
@@ -1918,6 +1922,20 @@ check("kanal z playlisty: odcinki ida do odtwarzacza jako rosnacy ciagly strumie
   src.indexOf("self._status = lib.LoaderStatus.kBuffering;") > 0 &&
   src.indexOf("this._status = lib.LoaderStatus.kComplete;") > 0 &&
   src.indexOf("if (this._onComplete) this._onComplete(0, this._offset);") > 0);
+/* Zapas obrazu przed odtwarzaniem pilnuje sam czytnik (FEEDER_BUFFER_AHEAD), więc
+   dla tej drogi doganianie „na żywo” z mpegts.js musi być wyłączone: _onmseUpdateEnd
+   po każdym dołożonym odcinku przeskakuje na koniec buforu (buffered.end - 0.5 s),
+   gotowy zapas znika i kanał w kółko wpada w „Ładowanie strumienia…”. Wyłączenie
+   musi być w bloku czytnika: zwykłe MSE dla .ts ma je zostawić włączone. */
+const mseConfigStart = src.indexOf("if (entry.hls) {\n        config.customLoader = createHlsTsLoader");
+const mseConfigEnd = src.indexOf("\n      }", mseConfigStart);
+const mseConfig = mseConfigStart > 0 && mseConfigEnd > mseConfigStart
+  ? src.slice(mseConfigStart, mseConfigEnd) : "";
+check("kanal z playlisty: nie gonimy obrazu na zywo (mpegts.js przeskakiwalby na koniec buforu)",
+  mseConfig.indexOf("config.liveBufferLatencyChasing = false;") > 0 &&
+  src.indexOf("liveBufferLatencyChasing: true,") > 0 &&
+  src.indexOf("liveBufferLatencyMaxLatency: 3.5,") > 0,
+  mseConfig.slice(0, 120));
 check("kanal z playlisty: nieudany odcinek wraca na poczatek kolejki (dziura w TS rozsypuje obraz)",
   src.indexOf("FeederLoader.prototype._segmentFailed = function (url, reason) {") > 0 &&
   src.indexOf("this._pending.unshift(url);") > 0 &&
