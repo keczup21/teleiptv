@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.6";
+  var APP_VERSION = "2.1.7";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -277,6 +277,10 @@
     videoLayerFix: false,
     osdEnabled: true,
     clockEnabled: false,
+    /* Odtwarzacz systemowy (Android): domyślnie wyłączony — to droga beta. Po
+       włączeniu kanał na żywo oddaje adres odtwarzaczowi odbiornika (patrz
+       startExoSource); gdy zostaje wyłączony, obraz idzie dotychczasowymi drogami. */
+    nativePlayer: false,
     favorites: {},
     recentChannels: {},
     groupOrder: {}
@@ -367,6 +371,7 @@
     scale_source_manual: "ustawiona ręcznie",
     osd_enabled: "Mini-EPG na kanale (co teraz leci)",
     clock_enabled: "Zegar w rogu obrazu (widoczny tylko podczas oglądania)",
+    native_player: "Odtwarzacz systemowy (beta) — kanał na żywo gra odtwarzaczem odbiornika, a nie przez JavaScript",
     platform_line: "Wykryto: {name} • interfejs: {mode}",
     platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
     platform_android: "Android", platform_ios: "iOS", platform_browser: "komputer / przeglądarka",
@@ -645,6 +650,7 @@
     scale_source_manual: "set by hand",
     osd_enabled: "Mini-EPG on channel (what's on now)",
     clock_enabled: "Clock in the corner (visible only while watching)",
+    native_player: "System player (beta) — a live channel plays on the device player, not through JavaScript",
     platform_line: "Detected: {name} • interface: {mode}",
     platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
     platform_android: "Android", platform_ios: "iOS", platform_browser: "desktop / browser",
@@ -1450,6 +1456,7 @@
     $("uiScale").value = normalizeUiScale(settings.uiScale);
     $("osdEnabled").checked = settings.osdEnabled !== false;
     $("clockEnabled").checked = settings.clockEnabled === true;
+    $("nativePlayer").checked = settings.nativePlayer === true;
     $("settingsError").textContent = "";
     resetUpdateStatus();
     /* „Wstecz” w ustawieniach wychodzi bez zapisu — przy pierwszym uruchomieniu
@@ -5287,10 +5294,13 @@
      (patrz startExoSource), potem odtwarzacz sprzętowy strony, a na końcu MSE i HLS. */
   function buildSourceQueue(primaryUrl) {
     var queue = [];
-    /* Odtwarzacz systemowy bierzemy tylko dla kanału NA ŻYWO: archiwum ma skończone
-       okno i wymaga przewijania, a to drogi <video>/MSE (nie ma tam czego
-       upraszczać). Gdy mostu nie ma (webOS, przeglądarka), wpisu nie ma wcale. */
-    if (exoBridge() && !state.watchProgram) queue.push({ engine: "exo", url: primaryUrl });
+    /* Odtwarzacz systemowy bierzemy tylko dla kanału NA ŻYWO i tylko wtedy, gdy
+       użytkownik go włączył (Ustawienia → „Odtwarzacz systemowy (beta)”): archiwum
+       ma skończone okno i wymaga przewijania, a droga systemowa jest wciąż
+       testowana. Gdy mostu nie ma (webOS, przeglądarka), wpisu nie ma wcale. */
+    if (settings.nativePlayer === true && exoBridge() && !state.watchProgram) {
+      queue.push({ engine: "exo", url: primaryUrl });
+    }
     queue.push({ engine: "native", url: primaryUrl });
     var bare = String(primaryUrl || "").split("#")[0].split("?")[0].toLowerCase();
     var extension = bare.indexOf(".") >= 0 ? bare.substring(bare.lastIndexOf(".") + 1) : "";
@@ -7689,7 +7699,10 @@
 
     var bar = $("playerActions");
     var playButton = bar ? bar.querySelector('[data-osd="play"]') : null;
-    if (playButton) setIconLabel(playButton, t(video && video.paused ? "osd_play" : "osd_pause"));
+    /* Obraz systemowy nie ma elementu <video> — czy jest zatrzymany, mówi most
+       (patrz state.exoPlaying), a nie video.paused. */
+    var paused = exoActive() ? !state.exoPlaying : !!(video && video.paused);
+    if (playButton) setIconLabel(playButton, t(paused ? "osd_play" : "osd_pause"));
     var muteButton = bar ? bar.querySelector('[data-osd="mute"]') : null;
     if (muteButton) setIconLabel(muteButton, muteLabel());
   }
@@ -8465,6 +8478,7 @@
     settings.uiScale = normalizeUiScale($("uiScale").value);
     settings.osdEnabled = $("osdEnabled").checked;
     settings.clockEnabled = $("clockEnabled").checked;
+    settings.nativePlayer = $("nativePlayer").checked;
 
     /* Wielkie teksty (playlista/EPG wybrane z pliku) trzymamy w osobnym kluczu,
        a w głównym zapisujemy tylko lekkie ustawienia — w przeciwnym razie zapis
@@ -8550,6 +8564,12 @@
   $("osdEnabled").onchange = function () {
     settings.osdEnabled = this.checked;
     if (!settings.osdEnabled) hideOsd();
+  };
+
+  /* Odtwarzacz systemowy jest beta: włącza się go ręcznie i działa od następnego
+     kanału (kolejka prób buduje się na nowo przy każdym wejściu w obraz). */
+  $("nativePlayer").onchange = function () {
+    settings.nativePlayer = this.checked;
   };
 
   /* aktualizacja: sprawdzenie wydania na GitHubie i — na Androidzie / Fire TV —

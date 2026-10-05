@@ -20,6 +20,13 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.7] — 2026-10-05
+
+### Poprawiono
+- **Kanały znowu grają jak przed odtwarzaczem systemowym** — odtwarzacz odbiornika jest teraz domyślnie wyłączony, więc obraz wraca na dotychczasowe drogi (sprzętowy odtwarzacz strony → MSE → HLS); włączony wcześniej zostawiał czarny obraz z samym dźwiękiem na wszystkich kanałach.
+- **„Odtwarzacz systemowy (beta)” jest przełącznikiem w ustawieniach** — można go włączyć ręcznie, a kanał na żywo pójdzie wtedy odtwarzaczem odbiornika (droga wciąż testowana).
+- **„Wznów” na pasku zgadza się ze stanem obrazu** — przy włączonym odtwarzaczu systemowym przycisk nie pokazuje już „Wznów” w trakcie oglądania.
+
 ## [2.1.6] — 2026-10-05
 
 ### Dodano

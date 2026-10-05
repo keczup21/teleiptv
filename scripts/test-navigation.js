@@ -328,7 +328,8 @@ check("obsluga klawiszy rozpoznaje pole szukania",
   src.indexOf("searchArrowTarget(key, caret === 0, caretEnd === field.value.length)") > 0);
 check("pasek odtwarzacza i menu opcji wstawiaja napisy z ikona",
   (src.match(/setIconLabel\(button, label\);/g) || []).length >= 2 &&
-  src.indexOf("setIconLabel(playButton, t(video && video.paused") > 0 &&
+  src.indexOf("var paused = exoActive() ? !state.exoPlaying : !!(video && video.paused);") > 0 &&
+  src.indexOf("setIconLabel(playButton, t(paused ? \"osd_play\" : \"osd_pause\"));") > 0 &&
   src.indexOf("setIconLabel(muteButton, muteLabel())") > 0);
 check("kafelek kanalu ma sama gwiazdke ulubionych (bez przycisku „<<” na archiwum)",
   src.indexOf('setIconLabel(favorite, isFavorite(channel) ? "★" : "☆")') > 0 &&
@@ -1948,11 +1949,11 @@ if (codeQueue.indexOf("function preferEngine(queue, hint)") < 0) {
 const queueBox = {
   settings: { engineHint: "" },
   /* Kolejka pyta most odtwarzacza systemowego, czy jest dostępny (patrz exoBridge
-     w app.js): w atrapie włącza go opcja „exo”, a „watchProgram” mówi, że to
-     archiwum. Bez tego kanał idzie dotychczasowymi drogami, tak jak na webOS. */
+     w app.js): w atrapie most jest zawsze (Android), a o tym, czy kanał nim idzie,
+     decyduje ustawienie „nativePlayer”. „watchProgram” mówi, że to archiwum. */
   state: { watchProgram: null },
   exoBridge: function () {
-    return queueBox.settings.exo === true ? { playNative: function () { return "ok"; } } : null;
+    return { playNative: function () { return "ok"; } };
   }
 };
 run(codeQueue, queueBox);
@@ -2003,7 +2004,7 @@ queueBox.settings.engineHint = "";
 /* Kanał na żywo w aplikacji na Androidzie idzie najpierw do odtwarzacza odbiornika
    (ExoPlayer) — to on rozbiera TS i HLS sprzętowo, więc tylko on daje 4K bez
    zrywania (patrz startExoSource). Gdy zawiedzie, kolejka idzie dalej jak dotąd. */
-queueBox.settings.exo = true;
+queueBox.settings.nativePlayer = true;
 const qExo = engines("http://s/x.ts");
 check("uruchomione: kanal na zywo idzie najpierw do odtwarzacza systemowego",
   qExo.join(",") === "exo,native,mse,native,hls" &&
@@ -2023,8 +2024,8 @@ check("uruchomione: archiwum zostaje na dotychczasowych drogach",
   qExoArchive.indexOf("exo") < 0 && qExoArchive.join(",") === "native,mse,native,hls",
   JSON.stringify(qExoArchive));
 queueBox.state.watchProgram = null;
-queueBox.settings.exo = false;
-check("uruchomione: bez mostu (webOS, przegladarka) kolejka jest jak dotad",
+queueBox.settings.nativePlayer = false;
+check("uruchomione: odtwarzacz systemowy jest domyslnie wylaczony (kolejka jak dotad)",
   engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
 
 
@@ -2716,6 +2717,14 @@ check("odtwarzacz systemowy: bez mostu (webOS, przegladarka) droga jest pomijana
   src.indexOf("function exoBridge() {") > 0 &&
   src.indexOf("if (!platformInfo.native) return null;") > 0 &&
   src.indexOf("if (!bridge || typeof bridge.playNative !== \"function\") return null;") > 0);
+check("odtwarzacz systemowy: domyslnie wylaczony — wlacza go przełącznik w ustawieniach",
+  src.indexOf("nativePlayer: false,") > 0 &&
+  src.indexOf("if (settings.nativePlayer === true && exoBridge() && !state.watchProgram) {") > 0 &&
+  html.indexOf('id="nativePlayer"') > 0 &&
+  src.indexOf("$(\"nativePlayer\").checked = settings.nativePlayer === true;") > 0 &&
+  src.indexOf("settings.nativePlayer = $(\"nativePlayer\").checked;") > 0 &&
+  src.indexOf("native_player: \"Odtwarzacz systemowy (beta)") > 0 &&
+  src.indexOf("native_player: \"System player (beta)") > 0);
 check("odtwarzacz systemowy: panel diagnostyki pokazuje odtwarzacz odbiornika i jego HEVC",
   src.indexOf("function exoInfo() {") > 0 &&
   src.indexOf("var native = exoInfo();") > 0 &&
