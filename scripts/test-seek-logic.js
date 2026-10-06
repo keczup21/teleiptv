@@ -51,7 +51,7 @@ function check(name, cond, extra) {
 
 function harness(o) {
   o = o || {};
-  const calls = { play: [], goLive: 0, osd: 0, error: [], osdHide: 0, timeouts: [] };
+  const calls = { play: [], goLive: 0, osd: 0, error: [], osdHide: 0, timeouts: [], seek: [], painted: 0 };
   const overlay = { classList: { remove: function () {}, add: function () {} } };
   const video = { duration: o.duration, currentTime: o.currentTime || 0 };
   /* Atrapy elementów interfejsu (wpis na pasku, komunikat na środku obrazu):
@@ -83,7 +83,11 @@ function harness(o) {
       seekDirection: 0,
       seekSize: 0,
       /* pasek otwarty klawiszem OK (menu) — skok musi go zamienić w informację */
-      osdMenu: !!o.osdMenu
+      osdMenu: !!o.osdMenu,
+      /* zegar obrazu silnika (VLC): takie nagranie nie ma elementu <video>, więc
+         pozycję i długość okna niesie most (patrz vlcEvent w app.js) */
+      vlcTime: o.vlcTime | 0,
+      vlcLength: o.vlcLength | 0
     },
     settings: { seekSeconds: o.seekSeconds === undefined ? 10 : o.seekSeconds },
     $: function (id) {
@@ -97,6 +101,24 @@ function harness(o) {
     scheduleOsdHide: function () { calls.osdHide++; },
     hasArchive: function () { return o.hasArchive !== false; },
     currentProgram: function () { return o.epg || null; },
+    /* Silnik odbiornika (VLC albo odtwarzacz systemowy — patrz nativeLayerActive):
+       w atrapie włącza go opcja „vlc” / „exo”. Jego obrazu nie ma w elemencie
+       <video>, więc skok o krok w nagraniu idzie jego zegarem (patrz
+       seekArchiveHardware). */
+    exoActive: function () { return o.exo === true; },
+    vlcActive: function () { return o.vlc === true; },
+    nativeLayerActive: function () { return o.exo === true || o.vlc === true; },
+    vlcSeek: function (ms) {
+      calls.seek.push(ms);
+      /* most, który milczy (np. zniknął w trakcie): jak w app.js zwracamy porażkę */
+      if (o.noSeek === true) return false;
+      /* jak w app.js: pasek rusza od razu, a nie po zdarzeniu z silnika */
+      sandbox.state.vlcTime = ms;
+      return true;
+    },
+    /* pasek odtwarzania (patrz updateOsdProgress w app.js): w atrapie liczymy
+       wywołania, bo sam pasek jest tu tylko atrapą elementu interfejsu */
+    updateOsdProgress: function () { calls.painted++; },
     t: function (k) { return k; },
     formatTime: function (s) { return "t" + s; },
     overlayTimer: null,
@@ -345,6 +367,81 @@ h = harness({ isArchive: true, duration: Infinity, currentTime: 0, program: { st
 h.api.seekBy(1);
 check("to samo w druga strone: tez tylko pasek",
   h.calls.osd === 1 && h.calls.goLive === 0 && h.calls.play.length === 0,
+  JSON.stringify(h.calls));
+
+/* --- 5b. nagranie z obrazem silnika (VLC): krok zegarem mostu ----------- */
+/* Catch-up kanału 4K idzie silnikiem VLC (drogi przeglądarki nie dadzą tam obrazu
+   — patrz buildSourceQueue), a jego obrazu nie ma w elemencie <video>. Pozycję
+   i długość okna niesie więc most, a krok jest jego skokiem do czasu
+   (patrz seekArchiveHardware w app.js). */
+h = harness({ isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000 });
+h.api.seekBy(1);
+check("nagranie VLC: krok w przod idzie do mostu w milisekundach",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 310000 && h.calls.painted === 1 &&
+  h.calls.play.length === 0 && h.calls.goLive === 0 && h.api.state.vlcTime === 310000,
+  JSON.stringify({ seek: h.calls.seek, painted: h.calls.painted }));
+
+h = harness({ isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000 });
+h.api.seekBy(-1);
+check("nagranie VLC: krok w tyl tez idzie do mostu",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 290000, JSON.stringify(h.calls.seek));
+
+h = harness({ isArchive: true, vlc: true, vlcTime: 2000, vlcLength: 5400000 });
+h.api.seekBy(-1);
+check("nagranie VLC: krok w tyl na poczatku nagrania staje na zerze",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 0 && h.api.state.vlcTime === 0,
+  JSON.stringify(h.calls.seek));
+
+/* program, ktory wciaz leci: koniec okna to „wroc na zywo”, a poczatek okna to
+   „siegnij po dluzsze okno catch-up” — tak samo jak dla elementu <video> */
+h = harness({
+  isArchive: true, vlc: true, vlcTime: 5398000, vlcLength: 5400000,
+  program: { start: NOW - 5400000, end: NOW + 600000, title: "Film" }
+});
+h.api.seekBy(1);
+check("nagranie VLC na krawedzi okna: do przodu wraca na zywo (bez skoku)",
+  h.calls.goLive === 1 && h.calls.seek.length === 0, JSON.stringify(h.calls));
+
+h = harness({
+  isArchive: true, vlc: true, vlcTime: 3000, vlcLength: 5400000,
+  program: { start: NOW - 5400000, end: NOW + 600000, title: "Film" }
+});
+h.api.seekBy(-1);
+check("nagranie VLC na poczatku okna: wstecz bierze dluzsze okno catch-up",
+  h.calls.play.length === 1 && h.calls.seek.length === 0 &&
+  h.calls.play[0].program.start === NOW - 5410000, JSON.stringify(h.calls));
+
+/* okno o nieznanej dlugosci (kanal na zywo zatrzymany, silnik bez zegara):
+   nie ma po czym skakac, wiec zostaje zmiana okna */
+h = harness({
+  isArchive: true, vlc: true, vlcTime: 0, vlcLength: 0,
+  program: { start: NOW - 600000, end: NOW, title: "P", timeshift: true }
+});
+h.api.seekBy(1);
+check("nagranie VLC bez znanej dlugosci okna: do przodu wraca na zywo (bez skoku)",
+  h.calls.goLive === 1 && h.calls.seek.length === 0, JSON.stringify(h.calls));
+
+h = harness({
+  isArchive: true, vlc: true, vlcTime: 0, vlcLength: 0,
+  program: { start: NOW - 7200000, end: NOW - 3600000, title: "Stary" }
+});
+h.api.seekBy(-1);
+check("nagranie VLC bez znanej dlugosci okna: tylko pasek",
+  h.calls.osd === 1 && h.calls.play.length === 0 && h.calls.goLive === 0 &&
+  h.calls.seek.length === 0, JSON.stringify(h.calls));
+
+/* odtwarzacz systemowy nie ma z nami zegara — zostaje samo okno catch-up */
+h = harness({ isArchive: true, exo: true });
+h.api.seekBy(-1);
+check("nagranie z odtwarzaczem systemowym: bez zegara zostaje samo okno catch-up",
+  h.calls.osd === 1 && h.calls.seek.length === 0 && h.calls.play.length === 0,
+  JSON.stringify(h.calls));
+
+/* most milczy (np. zniknal w trakcie): pasek z informacja, bez udawania skoku */
+h = harness({ isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000, noSeek: true });
+h.api.seekBy(1);
+check("nagranie VLC, most milczy: zostaje pasek z informacja",
+  h.calls.osd === 1 && h.calls.seek.length === 1 && h.calls.play.length === 0,
   JSON.stringify(h.calls));
 
 /* --- 6. pauza i wznowienie kanalu na zywo (pilot: pauza, play) ---------- */

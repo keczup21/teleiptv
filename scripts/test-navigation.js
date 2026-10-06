@@ -1402,7 +1402,7 @@ if (picStart < 0 || picEnd <= picStart) throw new Error("Nie znalazlem budzika o
 const codePicture = src.slice(picStart, src.lastIndexOf("\n\n", picEnd) + 2);
 ["videoHasPicture", "armPictureWatchdog", "retryCurrentEntry", "clearPictureWatchdog",
   "notePicture", "applyVideoLayerFix", "rememberEngine", "noteUhd", "manifestIsUhd",
-  "nativeCanPlay", "nativeEntryIndex", "pictureTimeout", "audioOnlyTimeout",
+  "nativeCanPlay", "nativeEntryIndex", "hardwareEntryIndex", "pictureTimeout", "audioOnlyTimeout",
   "channelNameIsUhd", "markUhdChannel"].forEach(function (fn) {
   if (codePicture.indexOf("function " + fn) < 0) throw new Error("Wyciety blok nie ma " + fn);
 });
@@ -1954,7 +1954,7 @@ const queueBox = {
   /* Kolejka pyta most odtwarzacza systemowego, czy jest dostępny (patrz exoBridge
      w app.js): w atrapie most jest zawsze (Android), a o tym, czy kanał nim idzie,
      decyduje ustawienie „nativePlayer”. „watchProgram” mówi, że to archiwum. */
-  state: { watchProgram: null },
+  state: { watchProgram: null, uhdSeen: false },
   exoBridge: function () {
     return { playNative: function () { return "ok"; } };
   },
@@ -2024,12 +2024,17 @@ check("uruchomione: zapamietany silnik nie omija odtwarzacza systemowego",
   qExoHint.map(function (e) { return e.engine; }).join(",") === "exo,native,mse,native,hls" &&
   qExoHint.length === 5,
   JSON.stringify(qExoHint.map(function (e) { return e.engine; })));
-/* Archiwum zostaje na <video>/MSE: jego okno jest skończone i wymaga przewijania. */
+/* Archiwum (catch-up): drogi sprzętowe wchodzą do kolejki, ale NIE na czele —
+   nagranie ma skończone okno i wymaga przewijania, a to mają drogi przeglądarki
+   (<video>, MSE). VLC i odtwarzacz systemowy zostają na końcu jako ratunek: dla
+   kanału 4K zostawały tam same drogi przeglądarki, a one nie dają tam obrazu
+   (<video> nie czyta MPEG-TS, a MSE gubi 4K HEVC) — catch-up 4K kończył się
+   czarnym ekranem (patrz buildSourceQueue). */
 queueBox.state.watchProgram = { title: "Wiadomosci", start: 1, end: 2 };
 queueBox.settings.engineHint = "";
 const qExoArchive = engines("http://s/x.ts");
-check("uruchomione: archiwum zostaje na dotychczasowych drogach",
-  qExoArchive.indexOf("exo") < 0 && qExoArchive.join(",") === "native,mse,native,hls",
+check("uruchomione: archiwum idzie najpierw dotychczasowymi drogami, sprzet na koncu",
+  qExoArchive.join(",") === "native,mse,native,hls,exo",
   JSON.stringify(qExoArchive));
 queueBox.state.watchProgram = null;
 queueBox.settings.nativePlayer = false;
@@ -2054,8 +2059,24 @@ check("uruchomione: przy obu przelacznikach kanal dostaje VLC",
   engines("http://s/x.ts").join(",") === "vlc,exo,native,mse,native,hls",
   JSON.stringify(engines("http://s/x.ts")));
 queueBox.state.watchProgram = { title: "Wiadomosci", start: 1, end: 2 };
-check("uruchomione: archiwum nie idzie silnikiem VLC (wymaga przewijania)",
-  engines("http://s/x.ts").indexOf("vlc") < 0, JSON.stringify(engines("http://s/x.ts")));
+check("uruchomione: w archiwum obie drogi sprzetowe sa na koncu kolejki (ratunek)",
+  engines("http://s/x.ts").join(",") === "native,mse,native,hls,vlc,exo",
+  JSON.stringify(engines("http://s/x.ts")));
+/* Kanał rozpoznany jako 4K (nazwa — patrz markUhdChannel) idzie w archiwum od razu
+   silnikiem: drogi przeglądarki nie dadzą tam obrazu, więc czekanie na nie kończyło
+   się czarnym ekranem. Przewijanie nagrania idzie wtedy zegarem silnika (seekBy). */
+queueBox.state.uhdSeen = true;
+check("uruchomione: archiwum kanalu 4K idzie silnikiem VLC (obraz, nie czekanie na <video>)",
+  engines("http://s/x.ts").join(",") === "vlc,exo,native,mse,native,hls",
+  JSON.stringify(engines("http://s/x.ts")));
+check("uruchomione: archiwum kanalu 4K bez VLC dostaje chociaz odtwarzacz systemowy",
+  (function () {
+    queueBox.settings.vlcPlayer = false;
+    const only = engines("http://s/x.ts").join(",");
+    queueBox.settings.vlcPlayer = true;
+    return only === "exo,native,mse,native,hls";
+  })(), JSON.stringify(engines("http://s/x.ts")));
+queueBox.state.uhdSeen = false;
 queueBox.state.watchProgram = null;
 queueBox.settings.nativePlayer = false;
 queueBox.settings.vlcPlayer = false;
@@ -2782,7 +2803,7 @@ check("odtwarzacz systemowy: bez mostu (webOS, przegladarka) droga jest pomijana
   src.indexOf("if (!bridge || typeof bridge.playNative !== \"function\") return null;") > 0);
 check("odtwarzacz systemowy: domyslnie wylaczony — wlacza go przełącznik w ustawieniach",
   src.indexOf("nativePlayer: false,") > 0 &&
-  src.indexOf("if (settings.nativePlayer === true && exoBridge() && !state.watchProgram) {") > 0 &&
+  src.indexOf("if (settings.nativePlayer === true && exoBridge()) {") > 0 &&
   html.indexOf('id="nativePlayer"') > 0 &&
   src.indexOf("$(\"nativePlayer\").checked = settings.nativePlayer === true;") > 0 &&
   src.indexOf("settings.nativePlayer = $(\"nativePlayer\").checked;") > 0 &&
@@ -2866,7 +2887,7 @@ check("VLC: most ma te same zadania, co droga systemowa",
 check("VLC: domyslnie wylaczony — wlacza go przelacznik w ustawieniach",
   src.indexOf("vlcPlayer: false,") > 0 &&
   src.indexOf("vlcTexture: true,") > 0 &&
-  src.indexOf("if (settings.vlcPlayer === true && vlcBridge() && !state.watchProgram) {") > 0 &&
+  src.indexOf("if (settings.vlcPlayer === true && vlcBridge()) {") > 0 &&
   html.indexOf('id="vlcPlayer"') > 0 &&
   html.indexOf('id="vlcTexture"') > 0 &&
   src.indexOf('$("vlcPlayer").checked = settings.vlcPlayer === true;') > 0 &&
@@ -2897,6 +2918,33 @@ check("VLC: wspolna warstwa obu silnikow (pasek, pauza, wyciszenie)",
   src.indexOf("function nativeSetMuted(muted) {") > 0 &&
   src.indexOf("if (entry.engine === \"vlc\") startVlcSource(entry);") > 0 &&
   src.indexOf("if (entry.engine !== \"exo\" && entry.engine !== \"vlc\") {") > 0);
+
+/* Zegar obrazu i przewijanie nagrania: catch-up kanalu 4K idzie silnikiem (drogi
+   przegladarki nie daja tam obrazu), a obraz VLC nie ma elementu <video> — pozycja
+   i dlugosc okna musza przyjsc z mostu, a skok o krok jego metoda (patrz emitClock
+   i setTime w VlcEngine oraz vlcEvent, vlcSeek i seekArchiveHardware w app.js). */
+check("VLC: most przekazuje pozycje i dlugosc okna oraz przyjmuje skok o krok",
+  java.indexOf("public void setVlcTime(final long ms)") > 0 &&
+  java.indexOf("vlcEngine.setTime(ms);") > 0 &&
+  javaVlc.indexOf("void setTime(long ms) {") > 0 &&
+  javaVlc.indexOf("player.setTime(Math.max(0, ms));") > 0 &&
+  javaVlc.indexOf("private void emitClock() {") > 0 &&
+  javaVlc.indexOf("if (time >= clockTime && time - clockTime < 250 && length == clockLength) return;") > 0 &&
+  javaVlc.indexOf("case MediaPlayer.Event.TimeChanged:") > 0 &&
+  javaVlc.indexOf("case MediaPlayer.Event.LengthChanged:") > 0 &&
+  javaVlc.indexOf("event.put(\"type\", \"time\");") > 0 &&
+  javaVlc.indexOf("event.put(\"time\", time);") > 0 &&
+  javaVlc.indexOf("if (length > 0) event.put(\"length\", length);") > 0);
+check("VLC: archiwum idzie silnikiem, a skok o krok jego zegarem",
+  src.indexOf("function vlcSeek(ms) {") > 0 &&
+  src.indexOf("bridge.setVlcTime(target);") > 0 &&
+  src.indexOf("if (type === \"time\") {") > 0 &&
+  src.indexOf("state.vlcLength = event.length | 0;") > 0 &&
+  src.indexOf("if (state.isArchive && vlcActive() && state.vlcLength > 0) {") > 0 &&
+  src.indexOf("function seekArchiveHardware(direction, step) {") > 0 &&
+  src.indexOf("if (nativeLayerActive()) {\n      seekArchiveHardware(direction, step);") > 0 &&
+  src.indexOf("var queue = archive && !state.uhdSeen ? browser.concat(hardware) : hardware.concat(browser);") > 0 &&
+  src.indexOf("var index = hardwareEntryIndex();") > 0);
 
 /* Zachowanie drogi natywnej, nie tylko obecność kodu: atrapa mostu (Java) + atrapa
    elementu <video>, którą droga natywna gasi. Zegar i budziki w rękach testu. */
@@ -3096,7 +3144,7 @@ if (vlcStart < 0 || vlcQueueAt <= vlcStart || vlcEnd <= vlcStart) {
   throw new Error("Nie znalazlem bloku odtwarzacza VLC w app.js");
 }
 const vlcCode = src.slice(vlcStart, vlcEnd);
-["vlcBridge", "vlcInfo", "vlcActive", "vlcPlay", "vlcVolume", "startVlcSource",
+["vlcBridge", "vlcInfo", "vlcActive", "vlcPlay", "vlcVolume", "vlcSeek", "startVlcSource",
   "stopVlc", "vlcEvent", "armVlcWatchdog"].forEach(function (fn) {
   if (vlcCode.indexOf("function " + fn) < 0) {
     throw new Error("Wyciety blok odtwarzacza VLC nie ma " + fn);
@@ -3105,7 +3153,7 @@ const vlcCode = src.slice(vlcStart, vlcEnd);
 
 function vlcHarness(o) {
   o = o || {};
-  const calls = { errors: [], notes: [], played: [], playing: [], muted: [], stopped: 0, timers: [] };
+  const calls = { errors: [], notes: [], played: [], playing: [], muted: [], times: [], stopped: 0, timers: [] };
   const classes = { html: [], body: [] };
   const toggle = function (list, name, on) {
     const at = list.indexOf(name);
@@ -3121,6 +3169,7 @@ function vlcHarness(o) {
     stopVlc: function () { calls.stopped++; },
     setVlcPlaying: function (playing) { calls.playing.push(playing); },
     setVlcMuted: function (muted) { calls.muted.push(muted); },
+    setVlcTime: function (ms) { calls.times.push(ms); },
     vlcInfo: function () {
       return o.info === undefined
         ? "{\"libvlc\":\"3.6.5\",\"api\":34,\"texture\":true,\"decoder\":\"hevc\",\"firstFrame\":true,\"lost\":3,\"bitrate\":8200}"
@@ -3149,6 +3198,9 @@ function vlcHarness(o) {
       vlcMuted: o.muted === true,
       vlcFirstFrame: o.firstFrame === true,
       vlcPictureWaited: false,
+      /* zegar obrazu (pozycja i dlugosc okna nagrania) — patrz vlcEvent */
+      vlcTime: o.time | 0,
+      vlcLength: o.length | 0,
       watchStart: 0,
       startTimer: null
     },
@@ -3261,6 +3313,33 @@ vh.api.stopVlc();
 check("VLC: zamkniecie obrazu gasi silnik i zdejmuje przezroczystosc",
   vh.calls.stopped === 1 && vh.api.state.vlcPlaying === false &&
   vh.classes.html.indexOf("exo-player") < 0 && vh.classes.body.indexOf("exo-player") < 0);
+
+/* Zegar obrazu: pozycja i dlugosc okna nagrania przychodza z mostu, a skok o krok
+   (⏪/⏩) idzie jego metoda. Bez tego catch-up na drodze VLC mial obraz, ale bez
+   paska odtwarzania i bez przewijania (patrz vlcEvent, vlcSeek, seekBy). */
+vh = vlcHarness({ playing: true });
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/catchup/4k.ts" });
+vh.api.vlcEvent({ type: "time", time: 42000, length: 5400000 });
+check("VLC: pozycja i dlugosc okna nagrania przychodza z mostu",
+  vh.api.state.vlcTime === 42000 && vh.api.state.vlcLength === 5400000,
+  JSON.stringify({ time: vh.api.state.vlcTime, length: vh.api.state.vlcLength }));
+vh.api.vlcEvent({ type: "time", time: 50000 });
+check("VLC: zdarzenie bez dlugosci nie kasuje znanego okna nagrania",
+  vh.api.state.vlcTime === 50000 && vh.api.state.vlcLength === 5400000);
+check("VLC: skok o krok idzie metoda mostu i rusza paskiem od razu",
+  vh.api.vlcSeek(19000) === true && vh.calls.times.join(",") === "19000" &&
+  vh.api.state.vlcTime === 19000, JSON.stringify(vh.calls.times));
+vh.api.vlcEvent({ type: "time", time: -5 });
+check("VLC: pozycja z silnika nie schodzi ponizej zera", vh.api.state.vlcTime === 0);
+check("VLC: skok w tyl tez idzie do mostu (ujemna pozycja przycieta do zera)",
+  vh.api.vlcSeek(-3000) === true && vh.calls.times.join(",") === "19000,0",
+  JSON.stringify(vh.calls.times));
+vh.api.stopVlc();
+check("VLC: zamkniecie obrazu zeruje zegar silnika",
+  vh.api.state.vlcTime === 0 && vh.api.state.vlcLength === 0);
+vh = vlcHarness({ noBridge: true });
+check("VLC: bez mostu nie ma czym przewijac (skok zglasza porazke)",
+  vh.api.vlcSeek(5000) === false);
 
 /* Most, ktorego nie ma (webOS, przegladarka, paczka bez bibliotek VLC dla tej ABI). */
 vh = vlcHarness({ noBridge: true });

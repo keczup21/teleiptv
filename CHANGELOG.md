@@ -20,6 +20,14 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.11] — 2026-10-06
+
+### Poprawiono
+- **Archiwum kanału 4K pokazuje obraz** — nagranie kanału 4K idzie teraz tym samym silnikiem, co kanał na żywo (VLC), bo drogi przeglądarki nie dają tam obrazu: element `<video>` nie czyta strumienia TS, a MSE gubi obraz 4K HEVC — catch-up 4K kończył się czarnym ekranem, a kanał HD zostaje przy dotychczasowych drogach.
+- **Nagranie na drodze silnika da się przewijać** — skok ⏪/⏩ w archiwum idzie zegarem silnika, więc pasek odtwarzania pokazuje pozycję i długość nagrania, a cofanie na początku okna sięga po dłuższe okno catch-up, zamiast przeskakiwać do przodu.
+- **Panel diagnostyki pokazuje zegar obrazu VLC** — wiersz silnika podaje pozycję i długość okna nagrania, więc z kanapy widać, czy skok naprawdę przesunął obraz.
+- **Pilot pokazuje prawdziwy stan obrazu** — przy włączonym VLC albo odtwarzaczu systemowym wskaźnik na pilocie nie mówi już „pauza” o lecącym obrazie.
+
 ## [2.1.10] — 2026-10-06
 
 ### Poprawiono

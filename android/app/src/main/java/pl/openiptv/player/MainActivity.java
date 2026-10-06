@@ -283,6 +283,19 @@ public class MainActivity extends BridgeActivity {
                     });
                 }
 
+                /* Skok w nagraniu (catch-up): pozycja w milisekundach, tak samo jak
+                   w app.js (patrz seekArchiveHardware). Dzięki temu archiwum idzie
+                   silnikiem VLC razem z przewijaniem, a nie tylko z obrazem. */
+                @JavascriptInterface
+                public void setVlcTime(final long ms) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (vlcEngine != null) vlcEngine.setTime(ms);
+                        }
+                    });
+                }
+
                 /* Co VLC widzi w strumieniu — panel diagnostyki pokazuje to obok
                    drogi systemowej (patrz diagCodecLines w app.js). */
                 @JavascriptInterface
@@ -654,10 +667,10 @@ public class MainActivity extends BridgeActivity {
 
        Trzecia droga obrazu (patrz VlcEngine): kanał na żywo może iść silnikiem
        VLC, gdy dekoder odbiornika nie wyrabia z tym strumieniem. Włączana jest
-       ręcznie w ustawieniach i tylko dla kanału na żywo — tak samo jak droga
-       systemowa, bo obie są testowe (patrz buildSourceQueue w app.js). Most jest
-       ten sam (OpenIptvNative): playVlc(), stopVlc(), setVlcPlaying(),
-       setVlcMuted(), vlcInfo(), a zdarzenia wracają do strony przez
+       ręcznie w ustawieniach na kanale na żywo i w archiwum (catch-up) — tak samo
+       jak droga systemowa, bo obie są testowe (patrz buildSourceQueue w app.js).
+       Most jest ten sam (OpenIptvNative): playVlc(), stopVlc(), setVlcPlaying(),
+       setVlcMuted(), setVlcTime(), vlcInfo(), a zdarzenia wracają do strony przez
        window.__openiptvVlcEvent. */
 
     private void initVlcEngine() {

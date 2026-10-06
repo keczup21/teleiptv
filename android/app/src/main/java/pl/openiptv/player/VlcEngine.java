@@ -116,6 +116,13 @@ class VlcEngine {
     private int flatTicks = 0;
     private boolean stallReported = false;
 
+    /* Zegar obrazu: pozycja i długość okna (w milisekundach). Obraz VLC nie ma
+       elementu <video>, więc pasek odtwarzania i skok o krok w nagraniu (catch-up)
+       czytają te liczby przez most — patrz emitClock, setTime oraz seekBy
+       i seekArchiveHardware w app.js. */
+    private volatile long clockTime = -1;
+    private volatile long clockLength = -1;
+
     VlcEngine(BridgeActivity activity, Listener listener) {
         this.activity = activity;
         this.listener = listener;
@@ -155,6 +162,42 @@ class VlcEngine {
         return message.length() > 120 ? message.substring(0, 120) : message;
     }
 
+    /* Pozycja i długość okna dla paska odtwarzania strony. Wysyłamy tylko wtedy,
+       gdy liczba naprawdę się zmieniła: zdarzenie „TimeChanged” przychodzi kilka
+       razy na sekundę, a pasek potrzebuje ćwierci sekundy dokładności — bez tego
+       most wołałby stronę bez potrzeby. Skok w tył (⏪) liczy się jako zmiana,
+       dlatego wolno wysłać liczbę mniejszą od poprzedniej. */
+    private void emitClock() {
+        if (player == null) return;
+        long time;
+        long length;
+        try {
+            time = player.getTime();
+            length = player.getLength();
+        } catch (Throwable error) {
+            return;
+        }
+        if (time < 0) time = 0;
+        if (length < 0) length = 0;
+        if (time >= clockTime && time - clockTime < 250 && length == clockLength) return;
+        clockTime = time;
+        clockLength = length;
+        String json;
+        try {
+            JSONObject event = new JSONObject();
+            event.put("type", "time");
+            event.put("time", time);
+            /* Długość okna tylko wtedy, gdy silnik ją zna: kanał na żywo nie ma
+               końca, a zero znaczy dla strony „nie ma po czym skakać”
+               (patrz seekArchiveHardware). */
+            if (length > 0) event.put("length", length);
+            json = event.toString();
+        } catch (Exception error) {
+            return;
+        }
+        if (listener != null) listener.onEvent(json);
+    }
+
     /* ============================  START KANAŁU  ============================
 
        Zwraca "ok" albo "error: powód" — tak samo, jak playNative w odtwarzaczu
@@ -189,6 +232,10 @@ class VlcEngine {
             lastDisplayed = 0;
             lastDecoded = 0;
             lastTexFrames = 0;
+            /* zegar obrazu też liczy się od nowa: pozycja z poprzedniego kanału
+               opisywałaby nowy (patrz emitClock) */
+            clockTime = -1;
+            clockLength = -1;
 
             player = new MediaPlayer(lib);
             player.setEventListener(new MediaPlayer.EventListener() {
@@ -318,6 +365,13 @@ class VlcEngine {
                 firstFrame = true;
                 readTrack();
                 emit("size", null, width, height);
+                break;
+            /* Zegar obrazu: pozycja i długość okna nagrania. Bez tych zdarzeń pasek
+               odtwarzania i skok o krok na drodze VLC nie miałyby z czym pracować
+               (patrz emitClock, setTime). */
+            case MediaPlayer.Event.TimeChanged:
+            case MediaPlayer.Event.LengthChanged:
+                emitClock();
                 break;
             case MediaPlayer.Event.EncounteredError:
                 lastError = "VLC nie odtworzył tego strumienia";
@@ -508,6 +562,20 @@ class VlcEngine {
         try {
             if (player != null) player.setVolume(muted ? 0 : 100);
         } catch (Throwable ignored) {
+        }
+    }
+
+    /* Skok w nagraniu (catch-up) — pozycja w milisekundach, tak samo jak w app.js
+       (patrz seekArchiveHardware). Krok liczy strona z ustawień („Krok przewijania
+       archiwum”), a VLC zna tylko „skocz do czasu”: przewija po odebranych danych,
+       więc krok jest natychmiastowy, a nie nowym wczytaniem strumienia. */
+    void setTime(long ms) {
+        try {
+            if (player == null) return;
+            player.setTime(Math.max(0, ms));
+        } catch (Throwable ignored) {
+            /* silnik, który nie potrafi przewinąć (np. kanał na żywo), zostawia
+               obraz tam, gdzie był */
         }
     }
 

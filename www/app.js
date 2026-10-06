@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.10";
+  var APP_VERSION = "2.1.11";
   var SCHEMA_VERSION = 4;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -210,6 +210,14 @@
     vlcPictureWaited: false,
     /* czy obraz VLC stanął na jednej klatce (patrz countFrames w VlcEngine) */
     vlcStalled: false,
+    /* Zegar obrazu VLC: pozycja i długość okna w milisekundach, w tej samej
+       jednostce co <video>. Obraz VLC nie ma elementu <video>, więc pasek
+       odtwarzania i przewijanie nagrania czytają te liczby z mostu (patrz
+       vlcEvent, seekBy). Silnik, który nie zna długości okna (kanał na żywo),
+       zostawia vlcLength = 0 — wtedy nie ma po czym skakać (patrz
+       seekArchiveHardware). */
+    vlcTime: 0,
+    vlcLength: 0,
     /* blokada zdarzeń przewijania listy (rysujemy jedną porcję na raz) */
     listScrollLock: false
   };
@@ -600,6 +608,7 @@
     help_catchup_live: "Przycisk „Na żywo” (na pasku odtwarzacza albo nad listą programów) wraca do bieżącej chwili.",
     help_catchup_days: "Ile dni wstecz sięga archiwum, ustawia „Dni EPG/archiwum wstecz” w zakładce „Ogólne”, a wielkość skoku — „Krok przewijania archiwum”.",
     help_catchup_note: "Kanał bez archiwum pokaże komunikat zamiast obrazu, a kanał bez EPG dostaje nagrania godzinowe — dzięki temu archiwum zostaje użyteczne.",
+    help_catchup_uhd: "Nagranie kanału 4K odtwarza silnik VLC, jeśli jest włączony — drogi przeglądarki nie dają tam obrazu, a przewijanie idzie wtedy zegarem silnika.",
     help_touch: "TELEFON I TABLET",
     help_touch_bar: "Te same akcje są na pasku u dołu obrazu — wystarczy dotknąć. Tylko tutaj, bez pilota, pasek ma także „Kanał” (menu opcji) i „Wstecz”, i zawija się do kilku rzędów.",
     help_touch_back: "Wyjście z obrazu: przycisk „Wstecz” na pasku albo systemowy przycisk wstecz na telefonie.",
@@ -900,6 +909,7 @@
     help_catchup_live: "The “Live” button (on the player bar or above the programme list) returns to the current moment.",
     help_catchup_days: "How many days back the archive goes is set by “EPG/archive days back” in the “General” tab, and the jump size by “Archive seek step”.",
     help_catchup_note: "A channel without archive shows a message instead of the picture, and a channel without EPG gets hourly recordings — so the archive stays useful.",
+    help_catchup_uhd: "A 4K recording plays through the VLC engine when it is switched on — the browser paths show no picture there, and seeking follows the engine's own clock.",
     help_touch: "PHONE AND TABLET",
     help_touch_bar: "The same actions sit on the bar at the bottom of the picture — just tap. Only here, without a remote, the bar also carries “Channel” (options menu) and “Back”, and wraps into a few rows.",
     help_touch_back: "Leaving the picture: the “Back” button on the bar or the system back button on the phone.",
@@ -3511,7 +3521,11 @@
     var inPlayer = !$("playerScreen").classList.contains("hidden");
     if (session) {
       try {
-        session.playbackState = inPlayer && video && !video.paused ? "playing" : "paused";
+        /* Obraz silnika odbiornika (VLC, odtwarzacz systemowy) nie jest w elemencie
+           <video>, więc o stanie odtwarzania mówi most (patrz nativePlaying) —
+           inaczej pilot pokazywałby „pauza” na lecącym obrazie. */
+        var playing = nativeLayerActive() ? nativePlaying() : !!(video && !video.paused);
+        session.playbackState = inPlayer && playing ? "playing" : "paused";
       } catch (error) { /* starsze WebView nie znają stanu sesji */ }
     }
     /* nazwa kanału i programu na wyświetlaczu pilota (AVRCP) */
@@ -4030,6 +4044,10 @@
       lines.push(" " + t("diag_vlc") + ": " + (state.vlcPlaying ? t("diag_playing") : t("diag_paused")) +
         " · " + t("diag_size") + ": " + (state.vlcWidth | 0) + "×" + (state.vlcHeight | 0) +
         " · " + t("diag_muted") + ": " + (state.vlcMuted ? t("diag_yes") : t("diag_no")) +
+        /* Pozycja i długość okna nagrania: bez tego nie da się w terenie stwierdzić,
+           czy skok o krok (⏪/⏩) naprawdę przesunął obraz (patrz seekBy). */
+        " · " + t("diag_time") + ": " + diagSeconds(state.vlcTime / 1000) + " s" +
+        (state.vlcLength > 0 ? " / " + diagSeconds(state.vlcLength / 1000) + " s" : "") +
         /* obraz stanął w tej próbie — kanał idzie dalej kolejką (patrz vlcEvent) */
         (state.vlcStalled ? " · " + t("diag_stall") : "") +
         " · " + t("diag_buffer") + ": " + t("diag_vlc_buffer"));
@@ -5518,6 +5536,26 @@
     try { bridge.setVlcMuted(muted === true); } catch (error) { /* most milczy */ }
   }
 
+  /* Przewijanie obrazu VLC (nagranie — patrz seekBy, seekArchiveHardware). Most
+     przyjmuje pozycję w milisekundach, czyli w tej samej jednostce, w jakiej
+     silnik donosi ją zdarzeniem (patrz emitClock w VlcEngine). Zwracamy false,
+     gdy mostu nie ma — wtedy nagrania nie ma po czym przewijać i wołający
+     zostaje przy zmianie okna catch-up. */
+  function vlcSeek(ms) {
+    var bridge = vlcBridge();
+    if (!bridge || typeof bridge.setVlcTime !== "function") return false;
+    var target = Math.max(0, Math.round(ms));
+    try {
+      bridge.setVlcTime(target);
+    } catch (error) {
+      return false;
+    }
+    /* Pasek ma ruszyć od razu, a nie dopiero po zdarzeniu z silnika: ono przychodzi
+       co ćwierć sekundy i przy skoku o krok widać byłoby zwłokę. */
+    state.vlcTime = target;
+    return true;
+  }
+
   /* Start kanału silnikiem VLC. Adres idzie do mostu razem z identyfikatorem
      przeglądarki (dostawcy potrafią po nim filtrować dostęp do kanału) i z drogą
      obrazu z ustawień — tym, co na telewizorze porównujemy. */
@@ -5568,6 +5606,10 @@
     }
     markExoMode(false);
     state.vlcPlaying = false;
+    /* zegar silnika dotyczył zamkniętego obrazu — nowy kanał liczy go od zera
+       (patrz playChannel) */
+    state.vlcTime = 0;
+    state.vlcLength = 0;
   }
 
   /* Zdarzenia z silnika VLC (VlcEngine → emitVlc). Trzymają ten sam stan, co
@@ -5576,6 +5618,15 @@
   function vlcEvent(event) {
     if (!vlcActive() || !state.watchChannel) return;
     var type = event && event.type;
+    /* Zegar silnika: pozycja obrazu i długość okna nagrania. Pasek odtwarzania
+       i skok o krok (⏪/⏩) czytają je stąd, bo obraz VLC nie ma elementu <video>
+       (patrz updateOsdProgress, seekBy). Silnik, który długości nie zna (kanał na
+       żywo), zostawia vlcLength w spokoju — zero znaczy „nie ma po czym skakać”. */
+    if (type === "time") {
+      state.vlcTime = Math.max(0, event.time | 0);
+      if ((event.length | 0) > 0) state.vlcLength = event.length | 0;
+      return;
+    }
     if (type === "size") {
       state.vlcWidth = event.width | 0;
       state.vlcHeight = event.height | 0;
@@ -5642,25 +5693,23 @@
     }, delay || VLC_START_WAIT);
   }
 
-  /* Kolejka prób dla kanału. Na Androidzie pierwszy jest odtwarzacz systemowy
-     (patrz startExoSource), potem odtwarzacz sprzętowy strony, a na końcu MSE i HLS. */
+  /* Kolejka prób dla kanału. Na Androidzie drogi sprzętowe (VLC i odtwarzacz
+     systemowy) stoją przed odtwarzaczem sprzętowym strony, a za nim są MSE i HLS. */
   function buildSourceQueue(primaryUrl) {
-    var queue = [];
-    /* Odtwarzacz systemowy bierzemy tylko dla kanału NA ŻYWO i tylko wtedy, gdy
-       użytkownik go włączył (Ustawienia → „Odtwarzacz systemowy (beta)”): archiwum
-       ma skończone okno i wymaga przewijania, a droga systemowa jest wciąż
-       testowana. Gdy mostu nie ma (webOS, przeglądarka), wpisu nie ma wcale. */
-    /* Silnik VLC bierzemy tak samo, jak odtwarzacz systemowy: kanał NA ŻYWO,
-       włączony ręcznie w ustawieniach i tylko tam, gdzie most istnieje. Gdy
-       włączone są oba przełączniki, kanał dostaje VLC — to on jest drogą dla
-       strumieni, na których dekoder odbiornika nie wyrabia. */
-    if (settings.vlcPlayer === true && vlcBridge() && !state.watchProgram) {
-      queue.push({ engine: "vlc", url: primaryUrl });
+    /* Drogi sprzętowe bierzemy tylko tam, gdzie most istnieje (Android) i gdzie
+       użytkownik włączył przełącznik w ustawieniach. Gdy włączone są oba, kanał
+       dostaje VLC — to on jest drogą dla strumieni, na których dekoder odbiornika
+       nie wyrabia (patrz startVlcSource, startExoSource). */
+    var hardware = [];
+    if (settings.vlcPlayer === true && vlcBridge()) {
+      hardware.push({ engine: "vlc", url: primaryUrl });
     }
-    if (settings.nativePlayer === true && exoBridge() && !state.watchProgram) {
-      queue.push({ engine: "exo", url: primaryUrl });
+    if (settings.nativePlayer === true && exoBridge()) {
+      hardware.push({ engine: "exo", url: primaryUrl });
     }
-    queue.push({ engine: "native", url: primaryUrl });
+
+    var browser = [];
+    browser.push({ engine: "native", url: primaryUrl });
     var bare = String(primaryUrl || "").split("#")[0].split("?")[0].toLowerCase();
     var extension = bare.indexOf(".") >= 0 ? bare.substring(bare.lastIndexOf(".") + 1) : "";
     var tsLike =
@@ -5668,23 +5717,47 @@
       extension === "ts" || extension === "mpegts" || extension === "mts" ||
       extension === "php" || extension === "m3u";
     if (extension === "m3u8") {
-      queue.push({ engine: "hls", url: primaryUrl });
+      browser.push({ engine: "hls", url: primaryUrl });
       /* Ostatnia deska ratunku dla kanału 4K HEVC: playlistę czyta własny czytnik,
          a strumień rozbiera mpegts.js (patrz createHlsTsLoader). hls.js takiego
          kodeka nie ruszy, a <video> nie czyta playlisty wcale — bez tego wpisu
          kolejka kończyła się na samym dźwięku. Ten wpis zostaje na końcu kolejki
          także dla zapamiętanego silnika (patrz preferEngine). */
-      queue.push({ engine: "mse", url: primaryUrl, hls: true });
+      browser.push({ engine: "mse", url: primaryUrl, hls: true });
     } else if (tsLike) {
-      queue.push({ engine: "mse", url: primaryUrl });
+      browser.push({ engine: "mse", url: primaryUrl });
     }
 
     /* ten sam kanał jako HLS — najczęstsza deska ratunku na telewizorach */
     var hlsUrl = primaryUrl.replace(/\.ts(\?.*)?$/i, ".m3u8$1");
     if (hlsUrl !== primaryUrl) {
-      queue.push({ engine: "native", url: hlsUrl });
-      queue.push({ engine: "hls", url: hlsUrl });
+      browser.push({ engine: "native", url: hlsUrl });
+      browser.push({ engine: "hls", url: hlsUrl });
     }
+
+    /* Gdzie postawić drogi sprzętowe:
+
+       • kanał NA ŻYWO: na czele. One mają najwięcej szans z 4K HEVC, którego
+         <video> i MSE nie rozbiorą — tak kanał grał, zanim aplikacja zaczęła się
+         uczyć silników.
+
+       • ARCHIWUM (catch-up): do 2.1.10 nie dostawało ich wcale, bo nagranie ma
+         skończone okno i wymaga przewijania. Skutek był jednak gorszy niż brak
+         przewijania: dla kanału 4K zostawały same drogi przeglądarki, a one nie
+         dają tam obrazu (<video> nie czyta MPEG-TS, a MSE na 4K HEVC gubi obraz —
+         patrz startMseSource), więc catch-up 4K kończył się czarnym ekranem.
+         Drogi sprzętowe wchodzą więc do kolejki także w archiwum, ale tam, gdzie
+         mają czego szukać:
+
+         – kanał rozpoznany jako 4K (z nazwy — patrz markUhdChannel): na czele,
+           bo drogi przeglądarki i tak nie dadzą tam obrazu. Przewijanie nagrania
+           idzie wtedy zegarem silnika (patrz seekBy, seekArchiveHardware),
+         – pozostałe kanały: na końcu, jako ratunek, gdy żadna droga przeglądarki
+           obrazu nie da. Dzięki temu HD zostaje przy <video>/MSE, czyli przy
+           przewijaniu, które ma okno znane od początku. */
+    var archive = !!state.watchProgram;
+    if (!hardware.length) return preferEngine(browser, settings.engineHint);
+    var queue = archive && !state.uhdSeen ? browser.concat(hardware) : hardware.concat(browser);
     return preferEngine(queue, settings.engineHint);
   }
 
@@ -5898,6 +5971,19 @@
     return -1;
   }
 
+  /* Pierwszy wpis oddany prawdziwemu dekoderowi sprzętowemu: silnikowi VLC albo
+     odtwarzaczowi systemowemu, a gdy ich w kolejce nie ma — elementowi <video>
+     (patrz nativeEntryIndex). Kanał okazuje się 4K także wtedy, gdy nazwa tego nie
+     mówi (metadane klatki, manifest HLS) — w archiwum drogi sprzętowe stoją wtedy
+     na KOŃCU kolejki (patrz buildSourceQueue), więc właśnie po ten wpis sięgamy,
+     żeby sprzęt dostał swoją próbę przed wyczerpaniem listy. */
+  function hardwareEntryIndex() {
+    for (var i = 0; i < state.sources.length; i++) {
+      if (state.sources[i].engine === "vlc" || state.sources[i].engine === "exo") return i;
+    }
+    return nativeEntryIndex();
+  }
+
   /* Nazwa kanału to jedyna informacja o rozdzielczości, jaką mamy PRZED startem
      odtwarzania — a właśnie wtedy trzeba wiedzieć, że wymuszona warstwa obrazu
      zostawia kanał 4K na czarnym ekranie (patrz noteUhd). */
@@ -5921,7 +6007,8 @@
 
        • zdejmujemy wymuszoną warstwę obrazu — przy 4K to ona zostawia czarny
          ekran (dekoder coś składa, ale obraz nie trafia na ekran),
-       • bez obrazu pierwszą próbę oddajemy dekoderowi sprzętowemu, bo 4K,
+       • bez obrazu pierwszą próbę oddajemy dekoderowi sprzętowemu (silnikowi VLC
+         albo odtwarzaczowi systemowemu — patrz hardwareEntryIndex), bo 4K,
          a zwłaszcza HEVC, rozbiera praktycznie tylko on (mpegts.js i hls.js
          wciągają do MSE zwykle sam dźwięk) — ale tylko wtedy, gdy ten dekoder
          naprawdę ma jeszcze przed sobą swoją próbę: gdy kolejka zaczynała się od
@@ -5951,7 +6038,7 @@
        powtarzamy ten sam wpis kolejki */
     var switched = false;
     if (state.engine !== "native" && !state.uhdNativeTried) {
-      var index = nativeEntryIndex();
+      var index = hardwareEntryIndex();
       if (index > state.sourceIndex) {
         state.uhdNativeTried = true;
         state.sourceIndex = index;
@@ -6301,6 +6388,10 @@
     state.vlcFirstFrame = false;
     state.vlcPictureWaited = false;
     state.vlcStalled = false;
+    /* zegar obrazu VLC: pozycja i długość okna poprzedniego kanału nie mogą
+       opisywać nowego (patrz vlcEvent, seekBy, updateOsdProgress) */
+    state.vlcTime = 0;
+    state.vlcLength = 0;
     markExoMode(false);
     /* nazwa kanału mówi wprost, że to 4K — rozpoznajemy to przed startem
        odtwarzania, żeby wymuszona warstwa obrazu nie zdążyła wejść kanałowi
@@ -6616,6 +6707,14 @@
       return;
     }
 
+    /* Nagranie, którego obraz rysuje silnik odbiornika (VLC albo odtwarzacz
+       systemowy): element <video> nie zna tu ani pozycji, ani długości okna,
+       więc skok idzie zegarem silnika (patrz seekArchiveHardware). */
+    if (nativeLayerActive()) {
+      seekArchiveHardware(direction, step);
+      return;
+    }
+
     /* nagranie, którego długości odtwarzacz nie zna — nie ma po czym skakać,
        zostaje tylko zmiana okna: dłużej wstecz albo powrót na żywo */
     if (!isFinite(video.duration)) {
@@ -6651,6 +6750,53 @@
     showSeekOverlay();
   }
 
+  /* Skok o krok w nagraniu, którego obraz rysuje silnik odbiornika (VLC albo
+     odtwarzacz systemowy). Elementu <video> tu nie ma, więc pozycję i długość
+     okna bierze się z mostu (patrz vlcEvent), a skok oddajemy silnikowi jego
+     własnym zegarem (patrz vlcSeek) — VLC przewija po odebranych danych, więc
+     krok w nagraniu jest natychmiastowy, a nie nowym wczytaniem strumienia.
+
+     Silnik bez zegara (odtwarzacz systemowy, okno o nieznanej długości) nie ma
+     po czym skakać — zostaje zmiana okna catch-up, dokładnie tak, jak dla
+     elementu <video> bez długości: ⏪ bierze dłuższe okno, ⏩ wraca na żywo. */
+  function seekArchiveHardware(direction, step) {
+    var stepMs = step * 1000;
+    if (!vlcActive() || state.vlcLength <= 0) {
+      if (atLiveEdge()) {
+        if (direction < 0) timeshiftBack();
+        else goLive();
+      } else {
+        showOsd();
+      }
+      return;
+    }
+
+    var at = state.vlcTime | 0;
+    /* koniec okna programu, który wciąż leci = powrót na żywo */
+    if (direction > 0 && atLiveEdge() && at + stepMs >= state.vlcLength - 500) {
+      goLive();
+      return;
+    }
+    /* za mało miejsca na pełny krok w tył = sięgnij po dłuższe okno catch-up */
+    if (direction < 0 && atLiveEdge() && at < stepMs) {
+      timeshiftBack();
+      return;
+    }
+
+    var target = Math.max(0, Math.min(state.vlcLength, at + direction * stepMs));
+    if (!vlcSeek(target)) {
+      /* most milczy (np. most zniknął w trakcie) — zostaje pasek z informacją */
+      showOsd();
+      return;
+    }
+    /* ile obrazu naprawdę przybyło: na krawędzi nagrania skok bywa mniejszy od
+       kroku (albo zerowy) — wtedy pasek nie pisze o ruchu, którego nie było */
+    var moved = Math.round(target / 1000) - Math.round(at / 1000);
+    if (moved) markSeek(moved < 0 ? -1 : 1, Math.abs(moved));
+    updateOsdProgress();
+    showSeekOverlay();
+  }
+
   /* pasek z czasem na chwilę po skoku — jak przy przewijaniu nagrania.
      Pasek pokazany przy skoku jest tylko informacją (chowa się po 1,8 s), więc
      ▲ ▼ dalej przełączają kanały — inaczej po skoku nie dałoby się zmienić
@@ -6681,9 +6827,15 @@
     }
 
     var video = $("video");
-    var behind = state.isArchive && video && isFinite(video.duration)
-      ? Math.ceil(video.duration)
-      : 0;
+    /* Jak długie okno już oglądamy: element <video> zna swoją długość, a obraz
+       silnika (VLC) donosi ją z mostu (patrz vlcEvent). Bez tego cofanie na drodze
+       silnika zaczynałoby nowe okno od „teraz”, czyli skakało do przodu zamiast
+       sięgać w tył — a to jest cała różnica między ◀ a „na żywo”. */
+    var behind = 0;
+    if (state.isArchive) {
+      if (vlcActive() && state.vlcLength > 0) behind = Math.ceil(state.vlcLength / 1000);
+      else if (video && isFinite(video.duration)) behind = Math.ceil(video.duration);
+    }
     var now = Date.now();
     /* wstrzymany kanał na żywo: cofamy się od miejsca zatrzymania, a nie od
        „teraz” — inaczej ◀ po pauzie przeniosłoby obraz do przodu */
@@ -8086,6 +8238,21 @@
     var video = $("video");
     var bar = $("playerProgress");
     if (!bar) return;
+
+    /* Nagranie z obrazem silnika odbiornika (VLC): pozycję i długość okna zna
+       tylko silnik (patrz vlcEvent), a element <video> ich nie ma — dlatego ten
+       wiersz idzie pierwszy. Okno o nieznanej długości (kanał na żywo) nie ma
+       czego pokazywać i zostaje przy pasku programu z EPG. */
+    if (state.isArchive && vlcActive() && state.vlcLength > 0) {
+      var at = state.vlcTime | 0;
+      bar.style.width = Math.min(100, Math.max(0, (at / state.vlcLength) * 100)) + "%";
+      var vlcTimeEl = $("playerTime");
+      if (vlcTimeEl) {
+        vlcTimeEl.textContent = formatTime(at / 1000) + " / " + formatTime(state.vlcLength / 1000) +
+          (isMuted() ? " • " + t("osd_muted") : "");
+      }
+      return;
+    }
 
     if (state.isArchive && video && isFinite(video.duration) && video.duration > 0) {
       bar.style.width = (video.currentTime / video.duration) * 100 + "%";
