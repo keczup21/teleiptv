@@ -20,6 +20,20 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.12] — 2026-10-06
+
+### Dodano
+- **Przesunięcie czasu EPG** — dla nadawcy, który w programie TV podaje czas zimowy, gdy u nas jest letni (albo odwrotnie), w ustawieniach wybiera się przesunięcie od −12 do +12 godzin, a lista programów i czasy archiwum przeliczają się od razu, bez pobierania EPG.
+- **„Pobierz EPG teraz”** — przycisk w ustawieniach odświeża program TV na żądanie, bez czekania na kolejny cykl „Odświeżania EPG”.
+
+### Poprawiono
+- **Zapis ustawień nie pobiera EPG od nowa** — programy zostają te, które już są, więc lista kanałów nie traci informacji „co teraz leci”, a megabajty XMLTV nie idą po raz drugi.
+- **Nagranie pokazuje długość programu, a nie dłuższego okna od serwera** — program godzinny w archiwum pokazywał 1:59:59, bo serwer oddawał dwa nagrania; pasek i licznik kończą się teraz na granicy programu, tak samo jak skok ⏩ na końcu programu.
+- **Lista programów wskazuje, co jest odtwarzane** — pozycja z archiwum, która leci teraz, dostaje podpis „odtwarzane”, a lista otwarta z paska odtwarzacza staje na niej fokusem.
+- **Silnik VLC gra pierwszy i jest domyślnie włączony** — kanał na żywo i nagranie z archiwum idą silnikiem VLC, a gdy nie da obrazu, aplikacja sama próbuje kolejnych dróg, bez zaznaczania czegokolwiek w ustawieniach.
+- **Pasek odtwarzacza nie dubluje zegara** — godzina została w rogu obrazu (ustawienie „Zegar w rogu obrazu”), a z nagłówka paska zniknęła.
+- **Podpowiedź pilota na pasku jest krótsza i czytelniejsza** — znak przycisku pauzy, którego czcionka dekodera nie miała (na ekranie zostawał prostokąt z krzyżykiem), zastąpiliśmy słowami.
+
 ## [2.1.11] — 2026-10-06
 
 ### Poprawiono

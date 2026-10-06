@@ -399,6 +399,21 @@ aside {
    materiał do catch-up). */
 .guide-program.now { border-color: var(--accent); }
 .guide-program.now time { color: var(--accent); }
+/* program odtwarzany teraz z archiwum: ten sam akcent, ale z własnym podpisem
+   (patrz buildGuideProgram) — na siatce od razu widać, co leci z nagrania */
+.guide-program.playing { border-color: var(--accent); }
+.guide-program.playing time { color: var(--accent); }
+.program-playing {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: .06em;
+  background: var(--accent);
+  color: #fff;
+}
 /* pasek postępu programu, który leci teraz — u dołu kafelka widać, ile zostało */
 .guide-progress {
   position: absolute;
@@ -875,7 +890,6 @@ body.uimode-touch .osd-actions { flex-wrap: wrap; }
 body.uimode-touch .progress { height: 6px; }
 
 /* ---------- OSD odtwarzacza (mini-EPG dla oglądanego kanału) ---------- */
-.player-clock { margin-left: auto; color: #fff; font-size: 20px; opacity: .85; font-variant-numeric: tabular-nums; }
 .osd-head { display: flex; align-items: center; gap: 16px; }
 .osd-now { margin: 0; font-size: 22px; color: var(--text); }
 .osd-now .osd-time { margin-right: 10px; color: var(--accent); font-weight: 600; }
@@ -898,8 +912,11 @@ body.uimode-tv .osd-actions button:focus-visible {
   outline-offset: 2px;
   box-shadow: none;
 }
-.osd-hint { margin: 4px 0 0; font-size: 15px; color: var(--faint); }
-body.uimode-tv .osd-hint { font-size: 17px; color: var(--muted); }
+/* Podpowiedź pilota na pasku odtwarzacza: sam tekst jest krótki (patrz
+   osd_hint_live / osd_hint_archive w app.js), a tutaj dostaje większą czcionkę
+   i interlinię — wcześniej długi napis był nieczytelny z kanapy. */
+.osd-hint { margin: 6px 0 0; font-size: 16px; line-height: 1.4; color: var(--muted); }
+body.uimode-tv .osd-hint { font-size: 19px; line-height: 1.45; color: var(--text); }
 
 /* ---------- menu kontekstowe pilota (MENU lub długie OK na kanale) ---------- */
 .ctx-menu {
@@ -1115,6 +1132,10 @@ body.uimode-tv .update-row button { font-size: 22px; padding: 18px 24px; }
 /* program, który leci teraz: obwódka akcentu i podpis LIVE przy tytule */
 .program.now { border-color: var(--accent); }
 .program.now time { color: var(--accent); }
+/* program odtwarzany teraz z archiwum (lista otwarta z odtwarzacza) — obwódka
+   akcentu i podpis przy tytule, patrz programEntry */
+.program.playing { border-color: var(--accent); }
+.program.playing time { color: var(--accent); }
 /* program, który dopiero będzie: widoczny, ale nie do wyboru (brak archiwum) */
 .program.future { opacity: .55; }
 .program.future:disabled { cursor: default; }

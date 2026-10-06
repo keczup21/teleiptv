@@ -21,8 +21,8 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.11";
-  var SCHEMA_VERSION = 4;
+  var APP_VERSION = "2.1.12";
+  var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
      a lista trzyma tylko 15 najnowszych (starsze wypadają) */
@@ -79,6 +79,14 @@
   var state = {
     channels: [],
     programs: {},
+    /* Surowy wynik parsowania XMLTV (bez przesunięcia godzin) — przesunięcie
+       nakładamy na niego, więc jego zmiana nie wymaga pobierania EPG po raz
+       drugi (patrz shiftPrograms, applyEpgShift). */
+    epgRaw: null,
+    /* „Odcisk” źródła, z którego pochodzą programy w pamięci: dopóki się nie
+       zmieni, loadCatalog() nie pobiera EPG od nowa — dzięki temu zapis
+       ustawień nie kasuje tego, co już mamy (patrz epgKey). */
+    epgKey: "",
     epgUrl: "",
     epgTimer: null,
     selectedChannel: null,
@@ -93,7 +101,6 @@
        dopiero na zwolnieniu — patrz mediaKeyAction() i keyup niżej. */
     mediaKeyAt: 0,
     currentSource: "",
-    altSource: "",
     retryCount: 0,
     retryTimer: null,
     stableTimer: null,
@@ -109,7 +116,6 @@
     /* lista kanałów budowana porcjami (wydajność na dużych playlistach) */
     listItems: [],
     listRendered: 0,
-    listGroup: null,
     listToken: 0,
     /* odtwarzacz: kolejka prób (natywnie / MSE / HLS) */
     sources: [],
@@ -133,10 +139,7 @@
        zmianie kanału albo skoku to tylko informacja — wtedy ▲ ▼ z obrazu dalej
        przełączają kanały (patrz obsługa klawiszy w odtwarzaczu). */
     osdMenu: false,
-    /* EPG */
-    epgLoading: false,
-    epgToken: 0,
-    epgLoaded: false,
+    /* EPG: programy w pamięci i odcisk źródła — patrz sekcja PAMIĘĆ EPG */
     /* klawisz OK trzymany wciśnięty (menu kontekstowe na TV) */
     okHoldTimer: null,
     okFired: false,
@@ -151,14 +154,10 @@
     /* czy przy tym wpisie kolejki próbowaliśmy już naprawy warstwy obrazu;
        bez tego jedna próba zamieniałaby się w pętlę */
     pictureRetried: false,
-    /* Kanał okazał się 4K (metadane klatki albo manifest HLS — patrz noteUhd).
-       Przy takim strumieniu obraz nie dostaje wymuszonej warstwy, a pierwszą
-       próbę dostaje dekoder sprzętowy: tak kanał 4K grał, zanim aplikacja
-       zaczęła się uczyć silników (patrz preferEngine, applyVideoLayerFix). */
+    /* Kanał 4K (metadane klatki, manifest HLS albo sama nazwa — patrz noteUhd,
+       markUhdChannel): obraz nie dostaje wymuszonej warstwy, a do kolejki prób
+       wchodzą na czele drogi sprzętowe (patrz buildSourceQueue). */
     uhdSeen: false,
-    /* czy przy tym kanale dekoder sprzętowy dostał już swoją próbę — jedno
-       przestawienie na kanał, żeby kolejka nie kręciła się w kółko */
-    uhdNativeTried: false,
     /* Kiedy w tej próbie naprawdę ruszył dźwięk (zdarzenie „playing”). Twardy
        budzik obrazu liczy od tego miejsca czas „dźwięk bez ani jednej klatki”,
        więc dociąganie danych przy czarnym ekranie nie przedłuża próby
@@ -262,7 +261,10 @@
   var archive = {
     channel: null,
     fromPlayer: false,
-    returnTo: "browserScreen"
+    returnTo: "browserScreen",
+    /* wpis listy, który jest odtwarzany teraz — lista otwarta z paska „EPG”
+       staje na nim fokusem (patrz programEntry, openArchive) */
+    playingButton: null
   };
 
   var DEFAULTS = {
@@ -281,6 +283,12 @@
     catchupAll: true,
     epgRefreshMinutes: 0,
     epgReloadOnStart: true,
+    /* Przesunięcie godzin EPG (w godzinach). Nadawca, który w XMLTV podaje czas
+       zimowy, gdy u nas jest letni (albo odwrotnie), dostaje tu „+1” / „−1” —
+       bez tego lista programów i archiwum wypadają godzinę obok (patrz
+       applyEpgShift). Przesunięcie działa też na czasy archiwum, więc materiał
+       z catch-up trafia dokładnie w wybrany program. */
+    epgShiftHours: 0,
     language: "pl",
     theme: "dark",
     uiMode: "auto",
@@ -299,11 +307,13 @@
        włączeniu kanał na żywo oddaje adres odtwarzaczowi odbiornika (patrz
        startExoSource); gdy zostaje wyłączony, obraz idzie dotychczasowymi drogami. */
     nativePlayer: false,
-    /* Odtwarzacz VLC (Android, beta): domyślnie wyłączony. Po włączeniu kanał na
-       żywo oddaje adres silnikowi VLC (patrz startVlcSource) — to droga dla
-       kanałów, na których dekoder odbiornika nie wyrabia z tym strumieniem. Gdy
-       włączone są oba przełączniki, kanał dostaje VLC (patrz buildSourceQueue). */
-    vlcPlayer: false,
+    /* Odtwarzacz VLC (Android): domyślnie WŁĄCZONY. Kanał na żywo i nagranie
+       z archiwum oddają adres silnikowi VLC (patrz startVlcSource), więc droga,
+       która na dekoderze odbiornika radzi sobie z każdym strumieniem, stoi
+       pierwsza, a pozostałe zostają jako automatyczne zapasy (patrz
+       buildSourceQueue). Przełącznik wyłącza ją całkiem — dla odbiorników, na
+       których obraz VLC wypada gorzej niż drogą przeglądarki. */
+    vlcPlayer: true,
     /* Droga obrazu dla VLC: przez kopiowanie klatek do kompozytora GPU
        (TextureView) albo wprost na płaszczyźnie obrazu odbiornika. To właśnie
        to porównujemy na telewizorze (patrz VlcEngine). */
@@ -333,6 +343,11 @@
     epg_refresh: "Odświeżanie EPG", on_start: "Tylko przy starcie", every_30min: "Co 30 minut",
     every_1h: "Co 1 godzinę", every_2h: "Co 2 godziny", every_6h: "Co 6 godzin",
     every_12h: "Co 12 godzin", every_24h: "Co 24 godziny", epg_reload_on_start: "Pobieraj EPG przy starcie",
+    epg_shift: "Przesunięcie czasu EPG",
+    epg_shift_hint: "Program na liście wypada godzinę obok (nadawca podaje czas zimowy, a u nas jest letni — albo odwrotnie)? Ustaw przesunięcie: lista programów i czasy archiwum przeliczą się od razu, bez pobierania EPG.",
+    epg_refresh_now: "Pobierz EPG teraz",
+    epg_shift_none: "bez zmian (0)",
+    epg_refresh_wait: "Kanały nie są jeszcze wczytane — najpierw użyj „Zapisz i pobierz”.",
     archive_playback: "ARCHIWUM I ODTWARZANIE", archive_days: "Dni EPG/archiwum wstecz",
     seek_step: "Krok przewijania archiwum", sec5: "5 sekund", sec10: "10 sekund", sec30: "30 sekund",
     min1: "1 minuta", min5: "5 minut", min10: "10 minut",
@@ -345,6 +360,7 @@
     guide_next_day: "Dzień ›", guide_yesterday: "Wczoraj", guide_day_before: "Przedwczoraj", today: "Dziś", date: "Data", time: "Godzina",
     guide_pan_hint: "◀ ▶ — przewijanie godzin • ▲ ▼ — kanały",
     back: "Wstecz", live: "LIVE", catchup: "CATCH-UP", archive: "Archiwum",
+    program_playing: "ODTWARZANE",
     loading: "Pobieranie…", all: "Wszystkie", favorites: "★ Ulubione", recent: "Ostatnio oglądane",
     group_order: "⇅ Kolejność grup", group_order_done: "✓ Gotowe", order_reset: "Alfabetycznie",
     order_hint: "Przestaw grupy przyciskami ▲ / ▼, a potem wybierz „Gotowe”.",
@@ -398,8 +414,8 @@
     scale_source_manual: "ustawiona ręcznie",
     osd_enabled: "Mini-EPG na kanale (co teraz leci)",
     clock_enabled: "Zegar w rogu obrazu (widoczny tylko podczas oglądania)",
-    native_player: "Odtwarzacz systemowy (beta) — kanał na żywo gra odtwarzaczem odbiornika, a nie przez JavaScript",
-    vlc_player: "Odtwarzacz VLC (beta) — kanał na żywo gra silnikiem VLC (jego własny demukser TS/HLS); dla kanałów, na których pozostałe drogi zawodzą",
+    native_player: "Odtwarzacz systemowy (beta) — kanał gra odtwarzaczem odbiornika, a nie przez JavaScript (droga zapasowa, gdy silnik VLC nie da obrazu)",
+    vlc_player: "Odtwarzacz VLC (zalecany) — kanał na żywo i nagranie z archiwum gra silnikiem VLC (jego własny demukser TS/HLS); gdy nie da obrazu, aplikacja sama próbuje pozostałych dróg",
     vlc_texture: "VLC: obraz przez powierzchnię obrazu (TextureView) — lekarstwo na czarny ekran (wyłączone rysuje wprost na płaszczyźnie obrazu odbiornika)",
     platform_line: "Wykryto: {name} • interfejs: {mode}",
     platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
@@ -413,8 +429,8 @@
     osd_back: "✕ Wstecz",
     osd_pause: "⏸ Pauza",
     osd_play: "⏵ Wznów",
-    osd_hint_live: "OK – pasek • ⏵‖ – pauza/wznów • ▲ ▼ – kanał, a w otwartym pasku – jego przyciski • ◀ ▶ – cofnij / do przodu • EPG – programy kanału • MENU – opcje • Wstecz – wyjście",
-    osd_hint_archive: "OK – pasek • ⏵‖ – pauza/wznów • ▲ ▼ – kanał, a w otwartym pasku – jego przyciski • ◀ ▶ – przewijanie • EPG – programy kanału • Wstecz – wyjście",
+    osd_hint_live: "OK – pasek • pauza – play/pause na pilocie • ◀ ▶ – cofnij / do przodu • ▲ ▼ – kanał • EPG – programy kanału • MENU – opcje",
+    osd_hint_archive: "OK – pasek • pauza – play/pause na pilocie • ◀ ▶ – przewijanie nagrania • ▲ ▼ – kanał • EPG – programy kanału • Wstecz – wyjście",
     osd_now: "Teraz:",
     osd_next_label: "Następnie:",
     osd_paused: "PAUZA",
@@ -608,7 +624,7 @@
     help_catchup_live: "Przycisk „Na żywo” (na pasku odtwarzacza albo nad listą programów) wraca do bieżącej chwili.",
     help_catchup_days: "Ile dni wstecz sięga archiwum, ustawia „Dni EPG/archiwum wstecz” w zakładce „Ogólne”, a wielkość skoku — „Krok przewijania archiwum”.",
     help_catchup_note: "Kanał bez archiwum pokaże komunikat zamiast obrazu, a kanał bez EPG dostaje nagrania godzinowe — dzięki temu archiwum zostaje użyteczne.",
-    help_catchup_uhd: "Nagranie kanału 4K odtwarza silnik VLC, jeśli jest włączony — drogi przeglądarki nie dają tam obrazu, a przewijanie idzie wtedy zegarem silnika.",
+    help_catchup_uhd: "Nagranie kanału 4K odtwarza silnik VLC — drogi przeglądarki nie dają tam obrazu, a przewijanie idzie wtedy zegarem silnika. Ten sam silnik gra zwykłe kanały i nagrania; gdy nie da obrazu, aplikacja sama próbuje kolejnych dróg.",
     help_touch: "TELEFON I TABLET",
     help_touch_bar: "Te same akcje są na pasku u dołu obrazu — wystarczy dotknąć. Tylko tutaj, bez pilota, pasek ma także „Kanał” (menu opcji) i „Wstecz”, i zawija się do kilku rzędów.",
     help_touch_back: "Wyjście z obrazu: przycisk „Wstecz” na pasku albo systemowy przycisk wstecz na telefonie.",
@@ -638,6 +654,11 @@
     epg_refresh: "EPG refresh", on_start: "Only on start", every_30min: "Every 30 minutes",
     every_1h: "Every 1 hour", every_2h: "Every 2 hours", every_6h: "Every 6 hours",
     every_12h: "Every 12 hours", every_24h: "Every 24 hours", epg_reload_on_start: "Load EPG on start",
+    epg_shift: "EPG time offset",
+    epg_shift_hint: "Programmes an hour off (the broadcaster sends winter time while we are on summer time — or the other way round)? Set the offset: the guide and the archive times are recalculated at once, without downloading the EPG again.",
+    epg_refresh_now: "Load EPG now",
+    epg_shift_none: "no change (0)",
+    epg_refresh_wait: "Channels are not loaded yet — use “Save & load” first.",
     archive_playback: "ARCHIVE & PLAYBACK", archive_days: "EPG/archive days back",
     seek_step: "Archive seek step", sec5: "5 seconds", sec10: "10 seconds", sec30: "30 seconds",
     min1: "1 minute", min5: "5 minutes", min10: "10 minutes",
@@ -650,6 +671,7 @@
     guide_next_day: "Day ›", guide_yesterday: "Yesterday", guide_day_before: "2 days ago", today: "Today", date: "Date", time: "Time",
     guide_pan_hint: "◀ ▶ — shift hours • ▲ ▼ — channels",
     back: "Back", live: "LIVE", catchup: "CATCH-UP", archive: "Archive",
+    program_playing: "PLAYING",
     loading: "Loading…", all: "All", favorites: "★ Favorites", recent: "Recently watched",
     group_order: "⇅ Group order", group_order_done: "✓ Done", order_reset: "Alphabetical",
     order_hint: "Move groups with the ▲ / ▼ buttons, then choose “Done”.",
@@ -703,8 +725,8 @@
     scale_source_manual: "set by hand",
     osd_enabled: "Mini-EPG on channel (what's on now)",
     clock_enabled: "Clock in the corner (visible only while watching)",
-    native_player: "System player (beta) — a live channel plays on the device player, not through JavaScript",
-    vlc_player: "VLC player (beta) — a live channel plays on the VLC engine (its own TS/HLS demuxer); for channels the other paths give up on",
+    native_player: "System player (beta) — a channel plays on the device player, not through JavaScript (a backup path when the VLC engine shows no picture)",
+    vlc_player: "VLC player (recommended) — a live channel and an archive recording play through the VLC engine (its own TS/HLS demuxer); when it shows no picture, the app tries the other paths by itself",
     vlc_texture: "VLC: picture through the picture surface (TextureView) — the cure for a black screen (off draws straight onto the device picture plane)",
     platform_line: "Detected: {name} • interface: {mode}",
     platform_firetv: "Fire TV", platform_androidtv: "Android TV", platform_googletv: "Google TV", platform_webos: "webOS",
@@ -718,8 +740,8 @@
     osd_back: "✕ Back",
     osd_pause: "⏸ Pause",
     osd_play: "⏵ Resume",
-    osd_hint_live: "OK – info bar • ⏵‖ – pause/resume • ▲ ▼ – channel, or the bar buttons while it is open • ◀ ▶ – back / forward • EPG – channel guide • MENU – options • Back – exit",
-    osd_hint_archive: "OK – info bar • ⏵‖ – pause/resume • ▲ ▼ – channel, or the bar buttons while it is open • ◀ ▶ – seek • EPG – channel guide • Back – exit",
+    osd_hint_live: "OK – info bar • pause – play/pause on the remote • ◀ ▶ – back / forward • ▲ ▼ – channel • EPG – channel guide • MENU – options",
+    osd_hint_archive: "OK – info bar • pause – play/pause on the remote • ◀ ▶ – seek the recording • ▲ ▼ – channel • EPG – channel guide • Back – exit",
     osd_now: "Now:",
     osd_next_label: "Next:",
     osd_paused: "PAUSED",
@@ -909,7 +931,7 @@
     help_catchup_live: "The “Live” button (on the player bar or above the programme list) returns to the current moment.",
     help_catchup_days: "How many days back the archive goes is set by “EPG/archive days back” in the “General” tab, and the jump size by “Archive seek step”.",
     help_catchup_note: "A channel without archive shows a message instead of the picture, and a channel without EPG gets hourly recordings — so the archive stays useful.",
-    help_catchup_uhd: "A 4K recording plays through the VLC engine when it is switched on — the browser paths show no picture there, and seeking follows the engine's own clock.",
+    help_catchup_uhd: "A 4K recording plays through the VLC engine — the browser paths show no picture there, and seeking follows the engine's own clock. The same engine plays ordinary channels and recordings; when it shows no picture, the app tries the next paths by itself.",
     help_touch: "PHONE AND TABLET",
     help_touch_bar: "The same actions sit on the bar at the bottom of the picture — just tap. Only here, without a remote, the bar also carries “Channel” (options menu) and “Back”, and wraps into a few rows.",
     help_touch_back: "Leaving the picture: the “Back” button on the bar or the system back button on the phone.",
@@ -1270,6 +1292,13 @@
     if (schema < 3) {
       delete stored.corsProxy;
     }
+    /* migracja 2.1.12: droga VLC jest włączana domyślnie (patrz DEFAULTS) i raz
+       włączamy ją także instalacjom, które mają zapisane „false” — inaczej nowy
+       domyślny wybór nigdy by się nie przebił. Kto jej nie chce, wyłącza
+       przełącznik, a jego wybór jest już respektowany (schema 5). */
+    if (schema < 5) {
+      stored.vlcPlayer = true;
+    }
     /* migracja 1.18.0: wielkie teksty (playlista/EPG wczytane z pliku) idą do
        osobnego klucza — w głównym zostają tylko lekkie ustawienia */
     var blobs = {};
@@ -1517,7 +1546,24 @@
     }
   }
 
+  /* Opcje przesunięcia EPG budujemy w kodzie: pełne i pół godziny od −12 do +12.
+     Napis jest ten sam w obu językach („+1 h”), więc nie ma czego tłumaczyć. */
+  function fillEpgShiftOptions() {
+    var select = $("epgShiftHours");
+    if (!select || select.options.length) return;
+    for (var half = -24; half <= 24; half++) {
+      var hours = half / 2;
+      var option = document.createElement("option");
+      option.value = String(hours);
+      option.textContent = hours === 0 ? t("epg_shift_none")
+        : (hours > 0 ? "+" : "-") + String(Math.abs(hours)).replace(".", ",") + " h";
+      select.appendChild(option);
+    }
+  }
+
   function openSettings() {
+    fillEpgShiftOptions();
+    $("epgShiftHours").value = String(normalizeEpgShift(settings.epgShiftHours));
     $("archiveDays").value = String(settings.archiveDays);
     $("seekSeconds").value = String(settings.seekSeconds);
     $("retryAttempts").value = String(settings.retryAttempts);
@@ -2625,9 +2671,73 @@
     });
   }
 
+  /* ---------------------------  PAMIĘĆ EPG  ---------------------------
+     Trzy rzeczy trzymają się razem: surowy wynik parsowania (epgRaw), programy
+     z nałożonym przesunięciem godzin (programs, patrz applyEpgShift) i odcisk
+     źródła (epgKey, patrz epgKey). Dzięki temu:
+
+       • zmiana „Przesunięcia czasu EPG” przelicza programy od razu, bez pobierania,
+       • zapis ustawień (loadCatalog) nie zaciąga EPG po raz drugi, dopóki źródło
+         i zakres dni są te same — pobrane programy zostają na liście kanałów. */
+
+  /* EPG bez danych: czyścimy wszystko razem, żeby kolejne wejście na listę
+     kanałów pobrało programy od nowa (patrz loadCatalog) */
+  function clearEpg() {
+    state.programs = {};
+    state.epgRaw = null;
+    state.epgKey = "";
+  }
+
+  /* „Odcisk” źródła EPG: profil, adres (albo plik) i zakres dni. loadCatalog()
+     woła go przy każdym wejściu na listę kanałów — także po zapisaniu ustawień —
+     i gdy odcisk się zgadza, programy zostają te, które już mamy. */
+  function epgKey(profile, url) {
+    if (!profile) return "";
+    var source = profile.epgFileText ? "file:" + profile.epgFileText.length : (url || "");
+    return profile.id + "|" + source + "|" + settings.archiveDays;
+  }
+
+  /* Przesunięcie godzin EPG (ustawienie „Przesunięcie czasu EPG”). Nadawca,
+     który w XMLTV podaje czas zimowy, gdy u nas jest letni (albo odwrotnie),
+     opisuje program godzinę obok: na liście widać wtedy złą pozycję, a archiwum
+     sięga po zły materiał. Przesunięcie nakładamy na wynik parsowania, więc
+     działa też w czasach catch-up (patrz buildCatchupUrl). */
+  function shiftPrograms(programs, hours) {
+    var src = programs || {};
+    var shift = Math.round((parseFloat(hours) || 0) * 3600000);
+    if (!shift) return src;
+    var out = {};
+    for (var key in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, key)) continue;
+      out[key] = (src[key] || []).map(function (program) {
+        var copy = {};
+        for (var field in program) copy[field] = program[field];
+        copy.start = program.start + shift;
+        copy.end = program.end + shift;
+        return copy;
+      });
+    }
+    return out;
+  }
+
+  /* Programy w pamięci = surowy wynik parsowania + przesunięcie z ustawień */
+  function applyEpgShift() {
+    if (!state.epgRaw) return state.programs;
+    state.programs = shiftPrograms(state.epgRaw, settings.epgShiftHours);
+    return state.programs;
+  }
+
+  /* Przesunięcie z formularza: pół godziny dokładności i zakres ±12 h (czas
+     zimowy/letni to pełna godzina, ale bywają źródła o pół godziny obok) */
+  function normalizeEpgShift(value) {
+    var hours = parseFloat(value);
+    if (!isFinite(hours)) return 0;
+    return Math.max(-12, Math.min(12, Math.round(hours * 2) / 2));
+  }
+
   function loadEpgInBackground(profile, epgUrl) {
     if (!profile.epgFileText && !epgUrl) {
-      state.programs = {};
+      clearEpg();
       setStatus(state.channels.length + " " + t("channels_count"));
       return;
     }
@@ -2640,21 +2750,25 @@
     epgSource.then(function (payload) {
       setStatus(state.channels.length + " " + t("channels_count") + " • " + t("parsing_epg"));
       return parseXmltvAsync(payload, settings.archiveDays).then(function (programs) {
-        state.programs = programs;
+        /* zapamiętujemy surowy wynik i odcisk źródła, a przesunięcie godzin
+           nakładamy na wierzch (patrz applyEpgShift) */
+        state.epgRaw = programs;
+        state.epgKey = epgKey(profile, epgUrl);
+        var shifted = applyEpgShift();
         var count = 0;
-        for (var k in state.programs) count += state.programs[k].length;
+        for (var k in shifted) count += shifted[k].length;
         if (state.channels.length) {
           selectGroup(state.selectedGroup, document.querySelector(".category.active"));
         }
         setStatus(state.channels.length + " " + t("channels_count") + " • EPG: " + count + " " + t("epg_programs"));
       });
     }, function (error) {
-      state.programs = {};
+      clearEpg();
       setStatus(state.channels.length + " " + t("channels_count") + " • EPG: " + t("epg_no_data") + " (" + error.message + ")");
     }).catch(function (error) {
       /* błąd rozpakowania albo parsowania nie może zostawić na pasku napisu
          „parsowanie EPG” — pokazujemy powód obok liczby kanałów */
-      state.programs = {};
+      clearEpg();
       setStatus(state.channels.length + " " + t("channels_count") + " • EPG: " + t("epg_no_data") +
         " (" + (error && error.message ? error.message : error) + ")");
     });
@@ -2767,13 +2881,23 @@
       /* 2) EPG w tle (o ile włączone przy starcie) — start jest odroczony do
          chwili, gdy lista kanałów i fokus są już gotowe (patrz scheduleEpgStart),
          żeby pobieranie i parsowanie nie zamroziło startu aplikacji */
-      if (settings.epgReloadOnStart) {
+      if (!settings.epgReloadOnStart) {
+        clearEpg();
         setStatus(state.channels.length + " " + t("channels_count"));
-        scheduleEpgStart(profile, state.epgUrl);
-      } else {
-        state.programs = {};
-        setStatus(state.channels.length + " " + t("channels_count"));
+        return;
       }
+      /* Programy z tego samego źródła zostają. Tędy przechodzi też zapis
+         ustawień („Zapisz i pobierz” woła loadCatalog), a pobieranie EPG od nowa
+         tylko dlatego, że ktoś zapisał ustawienia, kasowało z listy kanałów to,
+         co już było widać, i mieliło megabajty XMLTV (patrz epgKey). */
+      if (state.epgKey && state.epgKey === epgKey(profile, state.epgUrl)) {
+        var known = 0;
+        for (var knownKey in state.programs) known += state.programs[knownKey].length;
+        setStatus(state.channels.length + " " + t("channels_count") + " • EPG: " + known + " " + t("epg_programs"));
+        return;
+      }
+      setStatus(state.channels.length + " " + t("channels_count"));
+      scheduleEpgStart(profile, state.epgUrl);
     }).catch(function (error) {
       state.channels = [];
       setStatus(t("error") + " " + error.message);
@@ -3055,7 +3179,6 @@
        do DOM trafia tylko to, co realnie widać, a resztę dokładamy przy przewijaniu */
     state.listItems = visible;
     state.listRendered = 0;
-    state.listGroup = name;
     state.listToken++;
     container.textContent = "";
     container.scrollTop = 0;
@@ -3268,6 +3391,7 @@
     state.selectedChannel = channel;
     archive.channel = channel;
     archive.fromPlayer = fromPlayer;
+    archive.playingButton = null;
     /* „Wstecz” wraca do obrazu tylko wtedy, gdy coś tam jeszcze leci —
        pilnuje tego closeArchive() */
     archive.returnTo = fromPlayer ? "playerScreen" : "browserScreen";
@@ -3314,6 +3438,29 @@
     });
 
     showScreen("archiveScreen");
+
+    /* Lista otwarta z odtwarzacza staje na materiale, który leci: fokus (i widok)
+       idą na niego, żeby od razu było widać, co jest odtwarzane — a nie tylko
+       najnowsze nagranie na górze listy. showScreen ustawia fokus po 30 ms,
+       dlatego ten krok musi być późniejszy. */
+    var playing = archive.playingButton;
+    if (fromPlayer && playing) {
+      window.setTimeout(function () {
+        if (!playing.parentNode) return;
+        try { playing.focus(); } catch (error) { return; }
+        keepInView(playing);
+      }, 60);
+    }
+  }
+
+  /* Czy ten wpis listy to materiał, który leci teraz w odtwarzaczu? Początek
+     i koniec to jedyne liczby wspólne dla obu stron (lista i odtwarzacz), więc
+     porównujemy je wprost. Dzięki temu na liście otwartej z paska „EPG” widać,
+     co jest odtwarzane (patrz programEntry, buildGuideProgram). */
+  function isWatchedProgram(program) {
+    var current = state.watchProgram;
+    if (!current || !program) return false;
+    return current.start === program.start && current.end === program.end;
   }
 
   /* jedna pozycja listy programów: godzina, tytuł, podpis LIVE dla programu,
@@ -3322,9 +3469,11 @@
     var now = Date.now();
     var isNow = program.start <= now && program.end > now;
     var isFuture = program.start > now;
+    var watching = isWatchedProgram(program);
 
     var button = document.createElement("button");
-    button.className = "program" + (isNow ? " now" : "") + (isFuture ? " future" : "");
+    button.className = "program" + (isNow ? " now" : "") + (isFuture ? " future" : "") +
+      (watching ? " playing" : "");
     button.tabIndex = 0;
 
     var time = document.createElement("time");
@@ -3337,7 +3486,16 @@
     label.className = "program-title";
     label.textContent = program.title;
     row.appendChild(label);
-    if (isNow) {
+    if (watching) {
+      /* to ten materiał leci teraz w odtwarzaczu — podpis mówi to wprost, a na
+         liście otwartej z paska „EPG” fokus staje właśnie tutaj (patrz
+         openArchive) */
+      var playing = document.createElement("em");
+      playing.className = "program-playing";
+      playing.textContent = t("program_playing");
+      row.appendChild(playing);
+      archive.playingButton = button;
+    } else if (isNow) {
       var live = document.createElement("em");
       live.className = "guide-live";
       live.textContent = t("live");
@@ -3496,15 +3654,6 @@
     if (shown) details += "\n" + t("media_url") + ": " + shown;
 
     return details;
-  }
-
-  /* Gdy odbiornik nie radzi sobie z surowym .ts (typowe na webOS), ponawiamy
-     ten sam kanał raz jako HLS (.m3u8) — panele Xtream oraz część dostawców
-     M3U udostępniają ten sam strumień również w HLS. */
-  function alternateSource(channel, program, source) {
-    if (program || !channel || !source) return "";
-    if (!/\.ts(?:\?.*)?$/i.test(source)) return "";
-    return source.replace(/\.ts(\?.*)?$/i, ".m3u8$1");
   }
 
   /* ----------  sesja multimediów: ⏵‖ i ⏹ na pilocie ----------
@@ -5735,30 +5884,17 @@
       browser.push({ engine: "hls", url: hlsUrl });
     }
 
-    /* Gdzie postawić drogi sprzętowe:
-
-       • kanał NA ŻYWO: na czele. One mają najwięcej szans z 4K HEVC, którego
-         <video> i MSE nie rozbiorą — tak kanał grał, zanim aplikacja zaczęła się
-         uczyć silników.
-
-       • ARCHIWUM (catch-up): do 2.1.10 nie dostawało ich wcale, bo nagranie ma
-         skończone okno i wymaga przewijania. Skutek był jednak gorszy niż brak
-         przewijania: dla kanału 4K zostawały same drogi przeglądarki, a one nie
-         dają tam obrazu (<video> nie czyta MPEG-TS, a MSE na 4K HEVC gubi obraz —
-         patrz startMseSource), więc catch-up 4K kończył się czarnym ekranem.
-         Drogi sprzętowe wchodzą więc do kolejki także w archiwum, ale tam, gdzie
-         mają czego szukać:
-
-         – kanał rozpoznany jako 4K (z nazwy — patrz markUhdChannel): na czele,
-           bo drogi przeglądarki i tak nie dadzą tam obrazu. Przewijanie nagrania
-           idzie wtedy zegarem silnika (patrz seekBy, seekArchiveHardware),
-         – pozostałe kanały: na końcu, jako ratunek, gdy żadna droga przeglądarki
-           obrazu nie da. Dzięki temu HD zostaje przy <video>/MSE, czyli przy
-           przewijaniu, które ma okno znane od początku. */
-    var archive = !!state.watchProgram;
+    /* Drogi sprzętowe stają na CZELE kolejki — i na kanale na żywo, i w nagraniu
+       z archiwum. Powód jest jeden: to one mają najwięcej szans z materiałem,
+       którego przeglądarka nie rozbierze (<video> nie czyta MPEG-TS, a MSE na 4K
+       HEVC gubi obraz — patrz startMseSource), a w archiwum dodatkowo znają
+       własny zegar, więc przewijanie nagrania idzie u nich natychmiast (patrz
+       seekBy, seekArchiveHardware). Reszta zostaje w kolejce jako automatyczne
+       zapasy: gdy silnik nie da obrazu, nextSourceEntry() sam przechodzi do
+       następnej drogi — nie trzeba nic zaznaczać w ustawieniach ani przestawiać
+       ręcznie. */
     if (!hardware.length) return preferEngine(browser, settings.engineHint);
-    var queue = archive && !state.uhdSeen ? browser.concat(hardware) : hardware.concat(browser);
-    return preferEngine(queue, settings.engineHint);
+    return preferEngine(hardware.concat(browser), settings.engineHint);
   }
 
   /* Zapamiętany sposób odtwarzania idzie na początek kolejki. Jeśli telewizor
@@ -5777,12 +5913,9 @@
      gdzie go postawiono, czyli na końcu kolejki — patrz niżej. */
   function preferEngine(queue, hint) {
     if (hint !== "mse" && hint !== "hls") return queue;
-    /* Odtwarzacz systemowy zostaje na czele kolejki: to droga sprzętowa, więc
-       zapamiętany silnik nie ma po co jej omijać — a gdy nie da obrazu, kolejka idzie
-       dalej jak dotąd (patrz buildSourceQueue). */
-    /* Odtwarzacz systemowy albo VLC zostaje na czele kolejki: to drogi sprzętowe,
-       więc zapamiętany silnik nie ma po co ich omijać — a gdy nie dadażą obrazu,
-       kolejka idzie dalej jak dotąd (patrz buildSourceQueue). */
+    /* Droga sprzętowa (VLC albo odtwarzacz systemowy) zostaje na czele kolejki:
+       to nie jest „sposób odtwarzania”, który można zapamiętać i przeskoczyć —
+       a gdy nie da obrazu, kolejka idzie dalej jak dotąd (patrz buildSourceQueue). */
     if (queue[0] && (queue[0].engine === "exo" || queue[0].engine === "vlc")) return queue;
     for (var i = 1; i < queue.length; i++) {
       /* Czytnik playlisty (wpis z „hls: true”) zostaje na końcu kolejki. Z
@@ -5951,39 +6084,6 @@
     return false;
   }
 
-  /* Czy ten adres da się podać odtwarzaczowi wprost: surowy .ts idzie sprzętowo
-     wszędzie, ale .m3u8 tylko tam, gdzie odbiornik ma własną obsługę HLS (webOS,
-     Safari). W Androidzie podanie .m3u8 do <video> kończy się błędem, więc nie ma
-     po co przestawiać na to kolejki (patrz startHlsSource). */
-  function nativeCanPlay(url) {
-    if (!/\.m3u8([?#]|$)/i.test(String(url || ""))) return true;
-    var video = $("video");
-    return !!video && !!video.canPlayType &&
-      !!video.canPlayType("application/vnd.apple.mpegurl");
-  }
-
-  /* Pierwszy wpis kolejki, który ten odbiornik zagra sprzętowo — dla 4K to
-     zwykle jedyna droga do obrazu. */
-  function nativeEntryIndex() {
-    for (var i = 0; i < state.sources.length; i++) {
-      if (state.sources[i].engine === "native" && nativeCanPlay(state.sources[i].url)) return i;
-    }
-    return -1;
-  }
-
-  /* Pierwszy wpis oddany prawdziwemu dekoderowi sprzętowemu: silnikowi VLC albo
-     odtwarzaczowi systemowemu, a gdy ich w kolejce nie ma — elementowi <video>
-     (patrz nativeEntryIndex). Kanał okazuje się 4K także wtedy, gdy nazwa tego nie
-     mówi (metadane klatki, manifest HLS) — w archiwum drogi sprzętowe stoją wtedy
-     na KOŃCU kolejki (patrz buildSourceQueue), więc właśnie po ten wpis sięgamy,
-     żeby sprzęt dostał swoją próbę przed wyczerpaniem listy. */
-  function hardwareEntryIndex() {
-    for (var i = 0; i < state.sources.length; i++) {
-      if (state.sources[i].engine === "vlc" || state.sources[i].engine === "exo") return i;
-    }
-    return nativeEntryIndex();
-  }
-
   /* Nazwa kanału to jedyna informacja o rozdzielczości, jaką mamy PRZED startem
      odtwarzania — a właśnie wtedy trzeba wiedzieć, że wymuszona warstwa obrazu
      zostawia kanał 4K na czarnym ekranie (patrz noteUhd). */
@@ -6007,13 +6107,10 @@
 
        • zdejmujemy wymuszoną warstwę obrazu — przy 4K to ona zostawia czarny
          ekran (dekoder coś składa, ale obraz nie trafia na ekran),
-       • bez obrazu pierwszą próbę oddajemy dekoderowi sprzętowemu (silnikowi VLC
-         albo odtwarzaczowi systemowemu — patrz hardwareEntryIndex), bo 4K,
-         a zwłaszcza HEVC, rozbiera praktycznie tylko on (mpegts.js i hls.js
-         wciągają do MSE zwykle sam dźwięk) — ale tylko wtedy, gdy ten dekoder
-         naprawdę ma jeszcze przed sobą swoją próbę: gdy kolejka zaczynała się od
-         wpisu sprzętowego (patrz buildSourceQueue), jego próba już się odbyła
-         i wracanie do niej tylko kręci kolejkę w kółko.
+       • brak obrazu zostawiamy kolejce prób: drogi sprzętowe (silnik VLC,
+         odtwarzacz systemowy) stoją w niej na czele (patrz buildSourceQueue),
+         a gdy któraś nie da obrazu, nextSourceEntry() sam przechodzi do
+         następnej — bez przestawiania kolejki i bez kręcenia się w kółko.
 
      Klasę warstwy da się zdjąć tylko razem z elementem <video> — na gotowym
      dekoderze samo jej zdjęcie nie pomaga (patrz resetVideoElement) — a sposób
@@ -6033,25 +6130,10 @@
       retryCurrentEntry();
       return true;
     }
-    /* obrazu nie ma: przestawiamy na dekoder sprzętowy (jedno przestawienie na
-       kanał, żeby kolejka nie kręciła się w kółko), a gdy nie ma na co —
-       powtarzamy ten sam wpis kolejki */
-    var switched = false;
-    if (state.engine !== "native" && !state.uhdNativeTried) {
-      var index = hardwareEntryIndex();
-      if (index > state.sourceIndex) {
-        state.uhdNativeTried = true;
-        state.sourceIndex = index;
-        switched = true;
-      } else if (index >= 0) {
-        /* wpis sprzętowy jest już za nami (albo to on właśnie gra) — ten dekoder
-           dostał swoją próbę i nie dał obrazu, więc nie wracamy do niego */
-        state.uhdNativeTried = true;
-      }
-    }
-    /* nic nie zmieniliśmy: obrazu nie ma, ale to zwykła droga kolejki prób
-       (patrz budzik obrazu) — nie ma po co zaczynać kanału od nowa */
-    if (!cleared && !switched) return false;
+    /* obrazu nie ma, a warstwy obrazu nie było czego zdejmować — nie ma czego
+       naprawiać: do następnej drogi przejdzie sama kolejka prób
+       (patrz nextSourceEntry) */
+    if (!cleared) return false;
     destroyEngine();
     retryCurrentEntry();
     return true;
@@ -6364,9 +6446,8 @@
     state.isArchive = !!program;
     state.retryCount = 0;
     state.cycle = 0;
-    /* nowy kanał: rozdzielczość i sprzętowa próba liczą się od zera */
+    /* nowy kanał: rozdzielczość liczy się od zera */
     state.uhdSeen = false;
-    state.uhdNativeTried = false;
     /* Kondycja obrazu liczy się przy tym kanale od zera: zrywy i odświeżenia
        strumienia z poprzedniego obrazu nie mogą tu nic znaczyć (patrz guardTick). */
     state.guardStalls = 0;
@@ -6421,7 +6502,7 @@
       return;
     }
     source = String(source).split("|")[0];
-    /* kolejka prób: natywnie → MSE (mpegts.js) → HLS (hls.js) */
+    /* kolejka prób: silnik (VLC / systemowy) → natywnie → MSE → HLS */
     state.sources = buildSourceQueue(source);
 
     showScreen("playerScreen");
@@ -6506,7 +6587,6 @@
     markWatchedTime();
     state.recentChannel = null;
     state.currentSource = "";
-    state.altSource = "";
     state.sources = [];
     state.sourceIndex = 0;
     state.cycle = 0;
@@ -6687,6 +6767,17 @@
     return !!program.timeshift || program.end > Date.now();
   }
 
+  /* Ile sekund materiału naprawdę wybrał użytkownik. Serwer timeshiftu potrafi
+     oddać dłuższe okno niż zamówione (np. dwie godziny nagrania dla programu
+     godzinnego), a wtedy pasek postępu, licznik „x / y” i kroki ⏪/⏩ opisywały
+     coś innego, niż widać na liście EPG. Okno przycinamy więc do granic programu;
+     program, który wciąż leci, kończy się chwilą obecną (patrz playChannel). */
+  function archiveProgramSeconds() {
+    var program = state.watchProgram;
+    if (!program) return 0;
+    return Math.max(0, (Math.min(program.end, Date.now()) - program.start) / 1000);
+  }
+
   /* Przewijanie pilota (⏪/⏩): po nagraniu skaczemy o krok z ustawień, a gdy
      w oknie kończącym się na „teraz” nie ma już czego przewijać — ⏩ wraca na
      żywo, a ⏪ wczytuje dłuższe okno catch-up. Na samym kanale na żywo ⏪
@@ -6739,10 +6830,15 @@
       return;
     }
 
+    /* Krok kończy się na granicy programu, a nie na końcu nagrania oddanego przez
+       serwer (patrz archiveProgramSeconds): ⏩ na końcu programu nie wchodzi
+       w materiał, którego użytkownik nie wybrał — od tego jest „następny program”. */
+    var windowSeconds = archiveProgramSeconds();
+    var limit = windowSeconds > 0 ? Math.min(video.duration, windowSeconds) : video.duration;
     var before = video.currentTime;
-    video.currentTime = Math.max(0, Math.min(video.duration, before + direction * step));
-    $("playerProgress").style.width = (video.currentTime / video.duration) * 100 + "%";
-    $("playerTime").textContent = formatTime(video.currentTime) + " / " + formatTime(video.duration);
+    video.currentTime = Math.max(0, Math.min(limit, before + direction * step));
+    $("playerProgress").style.width = (Math.min(video.currentTime, limit) / limit) * 100 + "%";
+    $("playerTime").textContent = formatTime(video.currentTime) + " / " + formatTime(limit);
     /* ile obrazu naprawdę przybyło: na krawędzi nagrania skok bywa mniejszy od
        kroku (albo zerowy) — wtedy pasek nie pisze o ruchu, którego nie było */
     var moved = Math.round(video.currentTime) - Math.round(before);
@@ -6783,7 +6879,11 @@
       return;
     }
 
-    var target = Math.max(0, Math.min(state.vlcLength, at + direction * stepMs));
+    /* krok kończy się na granicy programu, nie na końcu nagrania od serwera
+       (patrz archiveProgramSeconds) */
+    var programSeconds = archiveProgramSeconds();
+    var limitMs = programSeconds > 0 ? Math.min(state.vlcLength, programSeconds * 1000) : state.vlcLength;
+    var target = Math.max(0, Math.min(limitMs, at + direction * stepMs));
     if (!vlcSeek(target)) {
       /* most milczy (np. most zniknął w trakcie) — zostaje pasek z informacją */
       showOsd();
@@ -7578,8 +7678,11 @@
 
     var isPast = p.end <= now;
     var isNow = p.start <= now && now < p.end;
+    /* materiał, który leci teraz w odtwarzaczu (także nagranie z archiwum) */
+    var watching = isWatchedProgram(p);
     block.classList.toggle("past", isPast);
     block.classList.toggle("now", isNow);
+    block.classList.toggle("playing", watching);
     if (p.start > now || (isPast && !canCatchup)) block.disabled = true;
     /* na wąskim kafelku tytuł bywa ucięty — pełny pokazuje podpowiedź */
     block.title = guideClock(p.start) + "–" + guideClock(p.end) + "  " + p.title;
@@ -7592,8 +7695,15 @@
     var lab = document.createElement("span");
     lab.textContent = p.title;
     titleRow.appendChild(lab);
-    /* program, który leci teraz, dostaje podpis „LIVE” */
-    if (isNow) {
+    /* program, który leci teraz, dostaje podpis „LIVE”; materiał odtwarzany
+       z archiwum — własny podpis („odtwarzane”), żeby na siatce było widać, co
+       leci, także wtedy, gdy to nie jest program bieżący */
+    if (watching) {
+      var playing = document.createElement("em");
+      playing.className = "program-playing";
+      playing.textContent = t("program_playing");
+      titleRow.appendChild(playing);
+    } else if (isNow) {
       var live = document.createElement("em");
       live.className = "guide-live";
       live.textContent = t("live");
@@ -8167,14 +8277,12 @@
     var video = $("video");
     var program = state.watchProgram;
     var titleEl = $("playerTitle");
-    var clockEl = $("playerClock");
     var nowRow = $("playerNow");
     var nextRow = $("playerNext");
     var timeEl = $("playerTime");
     var hintEl = $("playerHint");
 
     if (titleEl) titleEl.textContent = channel.name;
-    if (clockEl) clockEl.textContent = osdTime(Date.now());
 
     if (program) {
       /* odtwarzamy archiwum — pokazujemy nagranie i jego własny postęp */
@@ -8239,26 +8347,33 @@
     var bar = $("playerProgress");
     if (!bar) return;
 
+    var programSeconds = state.isArchive ? archiveProgramSeconds() : 0;
+
     /* Nagranie z obrazem silnika odbiornika (VLC): pozycję i długość okna zna
        tylko silnik (patrz vlcEvent), a element <video> ich nie ma — dlatego ten
        wiersz idzie pierwszy. Okno o nieznanej długości (kanał na żywo) nie ma
        czego pokazywać i zostaje przy pasku programu z EPG. */
     if (state.isArchive && vlcActive() && state.vlcLength > 0) {
-      var at = state.vlcTime | 0;
-      bar.style.width = Math.min(100, Math.max(0, (at / state.vlcLength) * 100)) + "%";
+      var total = state.vlcLength / 1000;
+      if (programSeconds > 0) total = Math.min(total, programSeconds);
+      var at = Math.min(state.vlcTime | 0, total * 1000);
+      bar.style.width = Math.min(100, Math.max(0, (at / (total * 1000)) * 100)) + "%";
       var vlcTimeEl = $("playerTime");
       if (vlcTimeEl) {
-        vlcTimeEl.textContent = formatTime(at / 1000) + " / " + formatTime(state.vlcLength / 1000) +
+        vlcTimeEl.textContent = formatTime(at / 1000) + " / " + formatTime(total) +
           (isMuted() ? " • " + t("osd_muted") : "");
       }
       return;
     }
 
     if (state.isArchive && video && isFinite(video.duration) && video.duration > 0) {
-      bar.style.width = (video.currentTime / video.duration) * 100 + "%";
+      var windowSeconds = video.duration;
+      if (programSeconds > 0) windowSeconds = Math.min(windowSeconds, programSeconds);
+      var where = Math.min(video.currentTime, windowSeconds);
+      bar.style.width = (where / windowSeconds) * 100 + "%";
       var timeEl = $("playerTime");
       if (timeEl) {
-        timeEl.textContent = formatTime(video.currentTime) + " / " + formatTime(video.duration) +
+        timeEl.textContent = formatTime(where) + " / " + formatTime(windowSeconds) +
           (isMuted() ? " • " + t("osd_muted") : "");
       }
       return;
@@ -9010,6 +9125,7 @@
     settings.catchupAll = $("catchupAll").checked;
     settings.epgRefreshMinutes = parseInt($("epgRefreshMinutes").value, 10) || 0;
     settings.epgReloadOnStart = $("epgReloadOnStart").checked;
+    settings.epgShiftHours = normalizeEpgShift($("epgShiftHours").value);
     settings.language = $("language").value === "en" ? "en" : "pl";
     settings.theme = $("theme").value === "light" ? "light" : "dark";
     settings.uiMode = $("uiMode").value === "tv" || $("uiMode").value === "touch" ? $("uiMode").value : "auto";
@@ -9104,6 +9220,31 @@
   $("osdEnabled").onchange = function () {
     settings.osdEnabled = this.checked;
     if (!settings.osdEnabled) hideOsd();
+  };
+
+  /* Przesunięcie czasu EPG działa od razu na tym, co już wczytane: programy
+     trzymamy bez przesunięcia (patrz applyEpgShift), więc nic nie trzeba
+     pobierać od nowa — lista kanałów i lista programów przeliczają się w miejscu */
+  $("epgShiftHours").onchange = function () {
+    settings.epgShiftHours = normalizeEpgShift(this.value);
+    flushSettings();
+    if (!state.epgRaw) return;
+    applyEpgShift();
+    if (state.channels.length) {
+      selectGroup(state.selectedGroup, document.querySelector(".category.active"));
+    }
+  };
+
+  /* „Pobierz EPG teraz”: ręczne odświeżenie programu TV, bez czekania na kolejny
+     cykl ustawienia „Odświeżanie EPG” (patrz refreshEpg). Zapis ustawień sam
+     z siebie EPG nie pobiera — patrz epgKey. */
+  $("epgRefreshNow").onclick = function () {
+    if (!state.channels.length) {
+      setSettingsError(t("epg_refresh_wait"));
+      return;
+    }
+    setSettingsError("");
+    refreshEpg();
   };
 
   /* Odtwarzacz systemowy jest beta: włącza się go ręcznie i działa od następnego

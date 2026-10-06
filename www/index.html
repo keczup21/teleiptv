@@ -85,6 +85,11 @@
         </select>
       </label>
       <label class="check-row"><input id="epgReloadOnStart" tabindex="0" type="checkbox" checked><span data-i18n="epg_reload_on_start">Pobieraj EPG przy starcie</span></label>
+      <label class="row-label"><span data-i18n="epg_shift">Przesunięcie czasu EPG</span>
+        <select id="epgShiftHours" tabindex="0"></select>
+      </label>
+      <p class="hint" data-i18n="epg_shift_hint">Program na liście wypada godzinę obok (nadawca podaje czas zimowy, a u nas jest letni — albo odwrotnie)? Ustaw przesunięcie: lista programów i czasy archiwum przeliczą się od razu, bez pobierania EPG.</p>
+      <button type="button" id="epgRefreshNow" tabindex="0" data-i18n="epg_refresh_now">Pobierz EPG teraz</button>
       <h2 data-i18n="archive_playback">ARCHIWUM I ODTWARZANIE</h2>
       <label class="row-label"><span data-i18n="archive_days">Dni EPG/archiwum wstecz</span>
         <select id="archiveDays" tabindex="0">
@@ -106,8 +111,8 @@
         </select>
       </label>
       <label class="check-row"><input id="dpadSeek" tabindex="0" type="checkbox" checked><span data-i18n="dpad_seek">Strzałki sterują transmisją: ◀ ▶ przewija, ▲ ▼ zmienia kanał</span></label>
-      <label class="check-row"><input id="nativePlayer" tabindex="0" type="checkbox"><span data-i18n="native_player">Odtwarzacz systemowy (beta) — kanał na żywo gra odtwarzaczem odbiornika, a nie przez JavaScript</span></label>
-      <label class="check-row"><input id="vlcPlayer" tabindex="0" type="checkbox"><span data-i18n="vlc_player">Odtwarzacz VLC (beta) — kanał na żywo gra silnikiem VLC (jego własny demukser TS/HLS); dla kanałów, na których pozostałe drogi zawodzą</span></label>
+      <label class="check-row"><input id="nativePlayer" tabindex="0" type="checkbox"><span data-i18n="native_player">Odtwarzacz systemowy (beta) — kanał gra odtwarzaczem odbiornika, a nie przez JavaScript (droga zapasowa, gdy silnik VLC nie da obrazu)</span></label>
+      <label class="check-row"><input id="vlcPlayer" tabindex="0" type="checkbox" checked><span data-i18n="vlc_player">Odtwarzacz VLC (zalecany) — kanał na żywo i nagranie z archiwum gra silnikiem VLC (jego własny demukser TS/HLS); gdy nie da obrazu, aplikacja sama próbuje pozostałych dróg</span></label>
       <label class="check-row"><input id="vlcTexture" tabindex="0" type="checkbox" checked><span data-i18n="vlc_texture">VLC: obraz przez powierzchnię obrazu (TextureView) — lekarstwo na czarny ekran (wyłączone rysuje wprost na płaszczyźnie obrazu odbiornika)</span></label>
       <h2 data-i18n="advanced">ZAAWANSOWANE (OPCJONALNE)</h2>
       <label><span data-i18n="catchup_template">Globalny szablon catch-up</span><input id="catchupTemplate" tabindex="0" type="text" placeholder="…start={utc}&end={utcend}"></label>
@@ -298,7 +303,6 @@
       <div class="osd-head">
         <span id="playerBadge" class="player-badge" data-i18n="live">LIVE</span>
         <strong id="playerTitle"></strong>
-        <span id="playerClock" class="player-clock"></span>
       </div>
       <div id="playerNow" class="osd-now"></div>
       <div class="progress"><i id="playerProgress"></i></div>

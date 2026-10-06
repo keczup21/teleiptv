@@ -1067,13 +1067,31 @@ check("Wstecz najpierw zamyka otwarty pasek, a potem wychodzi z kanalu",
 check("nakladka nad obrazem (menu opcji) ma swoje strzalki i OK",
   src.indexOf('if ($("contextMenu") || $("exitDialog")) {') > 0 &&
   src.indexOf("if (overlay && overlay.contains(osdFocus) && osdFocus.click) osdFocus.click();") > 0);
-check("podpowiedzi pilota i instrukcja opisuja ▲ ▼ w pasku oraz komunikat",
-  src.indexOf("a w otwartym pasku – jego przyciski") > 0 &&
-  src.indexOf("or the bar buttons while it is open") > 0 &&
+check("podpowiedzi pilota i instrukcja opisuja pauze, ▲ ▼ i komunikat",
+  src.indexOf("osd_hint_live: \"OK – pasek • pauza – play/pause na pilocie") > 0 &&
+  src.indexOf("osd_hint_archive: \"OK – pasek • pauza – play/pause na pilocie") > 0 &&
+  src.indexOf("osd_hint_live: \"OK – info bar • pause – play/pause on the remote") > 0 &&
+  src.indexOf("osd_hint_archive: \"OK – info bar • pause – play/pause on the remote") > 0 &&
   src.indexOf("widać na środku obrazu") > 0 &&
   src.indexOf("shows in the middle of the picture") > 0 &&
   html.indexOf("Po skoku komunikat („Cofnięto o 10 s”) widać na środku obrazu.") > 0 &&
   html.indexOf("Gdy pasek jest otwarty, ▲ ▼ wchodzą najpierw w jego przyciski") > 0);
+
+/* Podpowiedź na pasku była długa i zawierała znak ⏵‖, którego czcionka dekodera
+   (Fire TV, webOS) nie ma — zamiast logo przycisku pauzy zostawał prostokąt
+   z krzyżykiem. Podpowiedź mówi więc słowami, a znaki ikon mają tylko przyciski
+   (SVG — patrz ICON_PATHS). */
+const hintLines = src.split("\n").filter(function (line) {
+  return line.indexOf("osd_hint_live:") >= 0 || line.indexOf("osd_hint_archive:") >= 0;
+});
+check("podpowiedz pilota nie uzywa znakow, ktorych dekodery nie maja (⏵‖)",
+  hintLines.length === 4 && hintLines.every(function (line) {
+    return line.indexOf("⏵") < 0 && line.indexOf("‖") < 0;
+  }), hintLines.join(" | "));
+check("podpowiedz na pasku odtwarzacza jest wieksza i z wieksza interlinią",
+  /\.osd-hint \{[^}]*font-size: 16px[^}]*line-height: 1\.4/.test(css) &&
+  /body\.uimode-tv \.osd-hint \{[^}]*font-size: 19px[^}]*line-height: 1\.45/.test(css),
+  css.slice(css.indexOf(".osd-hint {"), css.indexOf("}", css.indexOf(".osd-hint {"))));
 
 /* Zachowanie, nie napisy: uruchamiamy prawdziwą obsługę klawiszy z app.js na
    atrapie ekranu odtwarzacza i patrzymy, co zrobi ▼ po otwarciu paska (OK),
@@ -1402,7 +1420,7 @@ if (picStart < 0 || picEnd <= picStart) throw new Error("Nie znalazlem budzika o
 const codePicture = src.slice(picStart, src.lastIndexOf("\n\n", picEnd) + 2);
 ["videoHasPicture", "armPictureWatchdog", "retryCurrentEntry", "clearPictureWatchdog",
   "notePicture", "applyVideoLayerFix", "rememberEngine", "noteUhd", "manifestIsUhd",
-  "nativeCanPlay", "nativeEntryIndex", "hardwareEntryIndex", "pictureTimeout", "audioOnlyTimeout",
+  "pictureTimeout", "audioOnlyTimeout",
   "channelNameIsUhd", "markUhdChannel"].forEach(function (fn) {
   if (codePicture.indexOf("function " + fn) < 0) throw new Error("Wyciety blok nie ma " + fn);
 });
@@ -1438,7 +1456,6 @@ function pictureHarness(o) {
       pictureRetried: false,
       /* rozpoznanie 4K przy kanale (metadane klatki albo manifest HLS) */
       uhdSeen: o.uhdSeen === true,
-      uhdNativeTried: o.nativeTried === true,
       retryTimer: null,
       /* jedna próba: od kiedy trwa i kiedy strumień ostatnio naprawdę coś dociągnął */
       entryWaitStart: o.waitStart === undefined ? 0 : o.waitStart,
@@ -1791,7 +1808,11 @@ check("kanal 4K: rozpoznany z metadanych i z manifestu HLS, a warstwa obrazu go 
   src.indexOf("if (videoIsUhd() && noteUhd()) return;") > 0 &&
   src.indexOf("if (manifestIsUhd(data) && noteUhd()) return;") > 0 &&
   src.indexOf("function noteUhd()") > 0 &&
-  src.indexOf("state.uhdSeen = false;\n    state.uhdNativeTried = false;") > 0);
+  src.indexOf("state.uhdSeen = false;\n    /* Kondycja obrazu") > 0);
+check("kanal 4K: kolejka nie przestawia sie w locie (drogi sprzetowe stoja na czele)",
+  src.indexOf("hardwareEntryIndex") < 0 &&
+  src.indexOf("nativeEntryIndex") < 0 &&
+  src.indexOf("uhdNativeTried") < 0);
 
 ph = pictureHarness({});
 check("uruchomione: 4K z manifestu HLS poznajemy po wysokosci poziomu, nie po obrazie",
@@ -1801,12 +1822,12 @@ check("uruchomione: 4K z manifestu HLS poznajemy po wysokosci poziomu, nie po ob
   ph.api.manifestIsUhd({}) === false && ph.api.manifestIsUhd(null) === false,
   String(ph.api.manifestIsUhd({ levels: [{ height: 2160 }] })));
 
-check("uruchomione: sprzetowo da sie podac .ts wszedzie, a .m3u8 tylko z wlasnym HLS odbiornika",
-  ph.api.nativeCanPlay("http://s/x.ts") === true &&
-  ph.api.nativeCanPlay("http://s/x/live/12345") === true &&
-  ph.api.nativeCanPlay("http://s/x.m3u8") === false &&
-  pictureHarness({ canPlayType: "maybe" }).api.nativeCanPlay("http://s/x.m3u8?token=1") === true,
-  String(ph.api.nativeCanPlay("http://s/x.m3u8")));
+/* Droga natywna z .m3u8: podajemy ją <video> tylko tam, gdzie odbiornik ma
+   własną obsługę HLS (webOS, Safari) — w Androidzie taka próba kończy się
+   błędem i kanał idzie dalej kolejką (patrz startHlsSource) */
+check("uruchomione: .m3u8 do <video> idzie tylko z wlasnym HLS odbiornika",
+  src.indexOf('var nativeHls = video.canPlayType("application/vnd.apple.mpegurl");') > 0 &&
+  src.indexOf('if (nativeHls) {\n          state.engine = "native";') > 0);
 
 /* 4K z wymuszoną warstwą obrazu: warstwa schodzi, a po nią kanał startuje jeszcze
    raz świeżym elementem — ale sposób odtwarzania, który już coś pokazywał, zostaje */
@@ -1846,9 +1867,10 @@ check("uruchomione: 4K na dekoderze sprzetowym bez warstwy obrazu gra dalej",
   ph.api.noteUhd() === false && ph.calls.started.length === 0 && ph.calls.pending.length === 0,
   JSON.stringify(ph.calls.started));
 
-/* kanał 4K z samym dźwiękiem (MSE nie rozbiera HEVC), a dekoder sprzętowy ma
-   jeszcze swoją próbę przed sobą (zapamiętany sposób odtwarzania wyprzedził go):
-   próba wraca do sprzętu — i tylko raz na kanał, żeby kolejka się nie kręciła */
+/* Kanał 4K, który nie daje obrazu, nie przestawia już kolejki: drogi sprzętowe
+   stoją na jej czele (patrz buildSourceQueue), a noteUhd() zdejmuje tylko
+   wymuszoną warstwę obrazu. Gdy nie ma i tego, nie ma czego naprawiać — kanał
+   idzie dalej kolejką prób (patrz nextSourceEntry). */
 ph = pictureHarness({
   engine: "mse", sourceIndex: 0, canPlayType: "maybe",
   sources: [
@@ -1857,33 +1879,9 @@ ph = pictureHarness({
     { engine: "hls", url: "http://s/x.m3u8" }
   ]
 });
-check("uruchomione: 4K bez obrazu przestawia sie na dekoder sprzetowy (jeszcze nie probowany)",
-  ph.api.noteUhd() === true && ph.api.state.uhdNativeTried === true &&
-  ph.api.state.sourceIndex === 1 && ph.calls.destroyed === 1 && ph.calls.pending.length === 1,
-  JSON.stringify({ index: ph.api.state.sourceIndex }));
-ph.fire();
-check("uruchomione: przestawienie trafia na wpis natywny",
-  ph.calls.started.length === 1 && ph.calls.started[0].engine === "native",
-  JSON.stringify(ph.calls.started));
-check("uruchomione: drugie przestawienie na dekoder sprzetowy juz sie nie zdarza",
-  ph.api.noteUhd() === false && ph.calls.started.length === 1,
-  String(ph.calls.started.length));
-
-/* Dekoder sprzętowy stoi na początku kolejki, więc gdy 4K wyjdzie później (typowy
-   kanał z playlisty), jego próba już się odbyła — powrót do niego tylko kręciłby
-   kolejkę w kółko, a kanał zostawał bez obrazu na dobrym strumieniu. */
-ph = pictureHarness({
-  engine: "mse", sourceIndex: 2, canPlayType: "maybe",
-  sources: [
-    { engine: "native", url: "http://s/x.m3u8" },
-    { engine: "hls", url: "http://s/x.m3u8" },
-    { engine: "mse", url: "http://s/x.m3u8", hls: true }
-  ]
-});
-check("uruchomione: 4K nie wraca do dekodera sprzetowego, ktory juz byl probowany",
-  ph.api.noteUhd() === false && ph.api.state.uhdNativeTried === true &&
-  ph.api.state.sourceIndex === 2 && ph.calls.destroyed === 0 &&
-  ph.calls.started.length === 0 && ph.calls.pending.length === 0,
+check("uruchomione: 4K bez obrazu nie przestawia kolejki w locie",
+  ph.api.noteUhd() === false && ph.api.state.sourceIndex === 0 &&
+  ph.calls.destroyed === 0 && ph.calls.started.length === 0 && ph.calls.pending.length === 0,
   JSON.stringify({ index: ph.api.state.sourceIndex, started: ph.calls.started }));
 
 /* Eleven Sports 1 4K: nazwa mówi wprost, że to 4K, więc warstwa obrazu jest zdjęta
@@ -1954,7 +1952,7 @@ const queueBox = {
   /* Kolejka pyta most odtwarzacza systemowego, czy jest dostępny (patrz exoBridge
      w app.js): w atrapie most jest zawsze (Android), a o tym, czy kanał nim idzie,
      decyduje ustawienie „nativePlayer”. „watchProgram” mówi, że to archiwum. */
-  state: { watchProgram: null, uhdSeen: false },
+  state: { watchProgram: null },
   exoBridge: function () {
     return { playNative: function () { return "ok"; } };
   },
@@ -2024,28 +2022,26 @@ check("uruchomione: zapamietany silnik nie omija odtwarzacza systemowego",
   qExoHint.map(function (e) { return e.engine; }).join(",") === "exo,native,mse,native,hls" &&
   qExoHint.length === 5,
   JSON.stringify(qExoHint.map(function (e) { return e.engine; })));
-/* Archiwum (catch-up): drogi sprzętowe wchodzą do kolejki, ale NIE na czele —
-   nagranie ma skończone okno i wymaga przewijania, a to mają drogi przeglądarki
-   (<video>, MSE). VLC i odtwarzacz systemowy zostają na końcu jako ratunek: dla
-   kanału 4K zostawały tam same drogi przeglądarki, a one nie dają tam obrazu
-   (<video> nie czyta MPEG-TS, a MSE gubi 4K HEVC) — catch-up 4K kończył się
-   czarnym ekranem (patrz buildSourceQueue). */
+/* Archiwum (catch-up) idzie tą samą drogą co kanał na żywo: drogi sprzętowe stoją
+   na czele, bo przewijanie nagrania idzie ich własnym zegarem, a nie nowym
+   wczytaniem strumienia (patrz seekBy, seekArchiveHardware w app.js). */
 queueBox.state.watchProgram = { title: "Wiadomosci", start: 1, end: 2 };
 queueBox.settings.engineHint = "";
 const qExoArchive = engines("http://s/x.ts");
-check("uruchomione: archiwum idzie najpierw dotychczasowymi drogami, sprzet na koncu",
-  qExoArchive.join(",") === "native,mse,native,hls,exo",
+check("uruchomione: archiwum tez idzie najpierw silnikiem (VLC wylaczony — systemowy)",
+  qExoArchive.join(",") === "exo,native,mse,native,hls",
   JSON.stringify(qExoArchive));
 queueBox.state.watchProgram = null;
 queueBox.settings.nativePlayer = false;
 check("uruchomione: odtwarzacz systemowy jest domyslnie wylaczony (kolejka jak dotad)",
   engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
-/* Silnik VLC idzie tą samą drogą: kanał NA ŻYWO, ręcznie włączony, i tylko tam,
-   gdzie most istnieje. Gdy włączone są oba przełączniki, kanał dostaje VLC — to on
-   jest drogą dla strumieni, na których dekoder odbiornika nie wyrabia. */
+/* Silnik VLC: stoi na CZELE kolejki — i na kanale na żywo, i w nagraniu
+   z archiwum. To on radzi sobie ze strumieniami, na których dekoder odbiornika
+   nie wyrabia, a jego własny zegar przewija nagranie (patrz buildSourceQueue,
+   seekArchiveHardware). Reszta zostaje w kolejce jako automatyczne zapasy. */
 queueBox.settings.vlcPlayer = true;
 const qVlc = engines("http://s/x.ts");
-check("uruchomione: kanal na zywo idzie silnikiem VLC, gdy przelacznik jest wlaczony",
+check("uruchomione: kanal na zywo idzie silnikiem VLC (droga sprzetowa pierwsza)",
   qVlc.join(",") === "vlc,native,mse,native,hls" &&
   queueBox.buildSourceQueue("http://s/x.ts")[0].url === "http://s/x.ts",
   JSON.stringify(qVlc));
@@ -2059,28 +2055,20 @@ check("uruchomione: przy obu przelacznikach kanal dostaje VLC",
   engines("http://s/x.ts").join(",") === "vlc,exo,native,mse,native,hls",
   JSON.stringify(engines("http://s/x.ts")));
 queueBox.state.watchProgram = { title: "Wiadomosci", start: 1, end: 2 };
-check("uruchomione: w archiwum obie drogi sprzetowe sa na koncu kolejki (ratunek)",
-  engines("http://s/x.ts").join(",") === "native,mse,native,hls,vlc,exo",
-  JSON.stringify(engines("http://s/x.ts")));
-/* Kanał rozpoznany jako 4K (nazwa — patrz markUhdChannel) idzie w archiwum od razu
-   silnikiem: drogi przeglądarki nie dadzą tam obrazu, więc czekanie na nie kończyło
-   się czarnym ekranem. Przewijanie nagrania idzie wtedy zegarem silnika (seekBy). */
-queueBox.state.uhdSeen = true;
-check("uruchomione: archiwum kanalu 4K idzie silnikiem VLC (obraz, nie czekanie na <video>)",
+check("uruchomione: nagranie z archiwum idzie tak samo silnikiem (obraz i wlasny zegar)",
   engines("http://s/x.ts").join(",") === "vlc,exo,native,mse,native,hls",
   JSON.stringify(engines("http://s/x.ts")));
-check("uruchomione: archiwum kanalu 4K bez VLC dostaje chociaz odtwarzacz systemowy",
+check("uruchomione: nagranie bez VLC dostaje odtwarzacz systemowy",
   (function () {
     queueBox.settings.vlcPlayer = false;
     const only = engines("http://s/x.ts").join(",");
     queueBox.settings.vlcPlayer = true;
     return only === "exo,native,mse,native,hls";
   })(), JSON.stringify(engines("http://s/x.ts")));
-queueBox.state.uhdSeen = false;
 queueBox.state.watchProgram = null;
 queueBox.settings.nativePlayer = false;
 queueBox.settings.vlcPlayer = false;
-check("uruchomione: silnik VLC jest domyslnie wylaczony (kolejka jak dotad)",
+check("uruchomione: bez silnikow zostaje droga przegladarki (zapasy w kolejce)",
   engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
 
 
@@ -2884,17 +2872,18 @@ check("VLC: most ma te same zadania, co droga systemowa",
   java.indexOf("public String vlcInfo()") > 0 &&
   java.indexOf("window.__openiptvVlcEvent&&window.__openiptvVlcEvent(") > 0 &&
   java.indexOf("initVlcEngine();") > 0);
-check("VLC: domyslnie wylaczony — wlacza go przelacznik w ustawieniach",
-  src.indexOf("vlcPlayer: false,") > 0 &&
+check("VLC: domyslnie wlaczony — droga obrazu, a przelacznik ja wylacza",
+  src.indexOf("vlcPlayer: true,") > 0 &&
+  src.indexOf("if (schema < 5) {\n      stored.vlcPlayer = true;\n    }") > 0 &&
   src.indexOf("vlcTexture: true,") > 0 &&
   src.indexOf("if (settings.vlcPlayer === true && vlcBridge()) {") > 0 &&
   html.indexOf('id="vlcPlayer"') > 0 &&
   html.indexOf('id="vlcTexture"') > 0 &&
   src.indexOf('$("vlcPlayer").checked = settings.vlcPlayer === true;') > 0 &&
   src.indexOf('settings.vlcPlayer = $("vlcPlayer").checked;') > 0 &&
-  src.indexOf("vlc_player: \"VLC player (beta)") > 0 &&
+  src.indexOf("vlc_player: \"VLC player (recommended)") > 0 &&
   src.indexOf("vlc_texture: \"VLC: picture through the picture surface (TextureView)") > 0 &&
-  src.indexOf("vlc_player: \"Odtwarzacz VLC (beta)") > 0 &&
+  src.indexOf("vlc_player: \"Odtwarzacz VLC (zalecany)") > 0 &&
   src.indexOf("vlc_texture: \"VLC: obraz przez powierzchnię obrazu (TextureView)") > 0);
 check("VLC: bez mostu (webOS, przegladarka) droga jest pomijana",
   src.indexOf("function vlcBridge() {") > 0 &&
@@ -2943,8 +2932,8 @@ check("VLC: archiwum idzie silnikiem, a skok o krok jego zegarem",
   src.indexOf("if (state.isArchive && vlcActive() && state.vlcLength > 0) {") > 0 &&
   src.indexOf("function seekArchiveHardware(direction, step) {") > 0 &&
   src.indexOf("if (nativeLayerActive()) {\n      seekArchiveHardware(direction, step);") > 0 &&
-  src.indexOf("var queue = archive && !state.uhdSeen ? browser.concat(hardware) : hardware.concat(browser);") > 0 &&
-  src.indexOf("var index = hardwareEntryIndex();") > 0);
+  src.indexOf("return preferEngine(hardware.concat(browser), settings.engineHint);") > 0 &&
+  src.indexOf("function archiveProgramSeconds() {") > 0);
 
 /* Zachowanie drogi natywnej, nie tylko obecność kodu: atrapa mostu (Java) + atrapa
    elementu <video>, którą droga natywna gasi. Zegar i budziki w rękach testu. */
@@ -3491,6 +3480,121 @@ const attrs = attrBox.diagAttributes('RESOLUTION=3840x2160,FRAME-RATE=50.000,COD
 check("atrybuty manifestu czytane z cudzyslowem w srodku (kodek 4K HEVC ma przecinek)",
   attrs.RESOLUTION === "3840x2160" && attrs["FRAME-RATE"] === "50.000" &&
   attrs.CODECS === "hvc1.1.6.L153,mp4a.40.2", JSON.stringify(attrs));
+
+/* --- 29. silnik pierwszy, okno programu i EPG z odciskiem zrodla -------------
+   Trzy rzeczy z 2.1.12: droga VLC jest zawsze pierwsza (patrz buildSourceQueue),
+   pasek nagrania opisuje dlugosc programu, a nie calego okna oddanego przez
+   serwer (patrz archiveProgramSeconds), EPG da sie przesunac o godzine i nie
+   pobiera sie od nowa przy kazdym zapisie ustawien (patrz shiftPrograms, epgKey). */
+
+/* okno programu: nagranie 1:59:59 dla programu godzinnego ma pokazywac 1 h */
+const winStart = src.indexOf("function archiveProgramSeconds()");
+const winEnd = src.indexOf("function seekBy(direction)");
+if (winStart < 0 || winEnd <= winStart) throw new Error("Nie znalazlem archiveProgramSeconds w app.js");
+const NOW_H = 1700000000000;
+const winBox = run(src.slice(winStart, winEnd), { Date: { now: function () { return NOW_H; } }, state: {} });
+winBox.state.watchProgram = { start: NOW_H - 7200000, end: NOW_H - 3600000 };
+check("nagranie w calosci: okno to dlugosc programu (1 h, nie 1:59:59)",
+  winBox.archiveProgramSeconds() === 3600, String(winBox.archiveProgramSeconds()));
+winBox.state.watchProgram = { start: NOW_H - 1800000, end: NOW_H + 1800000 };
+check("program, ktory wciaz leci: okno konczy sie na chwili obecnej",
+  winBox.archiveProgramSeconds() === 1800, String(winBox.archiveProgramSeconds()));
+winBox.state.watchProgram = { start: NOW_H - 60000, end: NOW_H, timeshift: true };
+check("okno catch-up (timeshift): dlugosc okna bez zmian",
+  winBox.archiveProgramSeconds() === 60, String(winBox.archiveProgramSeconds()));
+winBox.state.watchProgram = null;
+check("kanal bez wybranego programu: nie ma czego przycinac",
+  winBox.archiveProgramSeconds() === 0, String(winBox.archiveProgramSeconds()));
+check("pasek i kroki ⏪/⏩ koncza sie na granicy programu, nie na koncu okna od serwera",
+  src.indexOf("if (programSeconds > 0) windowSeconds = Math.min(windowSeconds, programSeconds);") > 0 &&
+  src.indexOf("var limit = windowSeconds > 0 ? Math.min(video.duration, windowSeconds) : video.duration;") > 0 &&
+  src.indexOf("var limitMs = programSeconds > 0 ? Math.min(state.vlcLength, programSeconds * 1000) : state.vlcLength;") > 0);
+
+/* przesuniecie godzin EPG (czas zimowy / letni) */
+const shiftStart = src.indexOf("function shiftPrograms(programs, hours)");
+const shiftEnd = src.indexOf("function loadEpgInBackground(");
+if (shiftStart < 0 || shiftEnd <= shiftStart) throw new Error("Nie znalazlem shiftPrograms w app.js");
+const shiftBox = run(src.slice(shiftStart, shiftEnd), {});
+const shifted = shiftBox.shiftPrograms({ c1: [{ start: 1000, end: 2000, title: "X" }] }, 1);
+check("przesuniecie EPG o +1 h: wszystkie kanaly, a reszta pol bez zmian",
+  shifted.c1[0].start === 1000 + 3600000 && shifted.c1[0].end === 2000 + 3600000 &&
+  shifted.c1[0].title === "X", JSON.stringify(shifted));
+const shiftedBack = shiftBox.shiftPrograms({ c1: [{ start: 1000, end: 2000 }] }, -1.5);
+check("przesuniecie o -1,5 h tez dziala (zrodla o pol godziny obok)",
+  shiftedBack.c1[0].start === 1000 - 5400000, JSON.stringify(shiftedBack));
+const rawEpg = { c1: [{ start: 1, end: 2 }] };
+check("przesuniecie 0 zostawia surowy wynik bez kopiowania",
+  shiftBox.shiftPrograms(rawEpg, 0) === rawEpg);
+check("przesuniecie z formularza: pol godziny dokladnosci i zakres ±12 h",
+  shiftBox.normalizeEpgShift("1") === 1 && shiftBox.normalizeEpgShift("-1") === -1 &&
+  shiftBox.normalizeEpgShift("-1.5") === -1.5 && shiftBox.normalizeEpgShift("0.5") === 0.5 &&
+  shiftBox.normalizeEpgShift("40") === 12 && shiftBox.normalizeEpgShift("-40") === -12 &&
+  shiftBox.normalizeEpgShift("") === 0 && shiftBox.normalizeEpgShift("abc") === 0,
+  String(shiftBox.normalizeEpgShift("40")));
+check("EPG: surowy wynik + przesuniecie, wiec zmiana ustawienia nic nie pobiera",
+  src.indexOf("state.epgRaw = programs;") > 0 &&
+  src.indexOf("state.programs = shiftPrograms(state.epgRaw, settings.epgShiftHours);") > 0 &&
+  html.indexOf('id="epgShiftHours"') > 0 &&
+  html.indexOf('id="epgRefreshNow"') > 0 &&
+  src.indexOf('$("epgShiftHours").onchange') > 0 &&
+  src.indexOf('$("epgRefreshNow").onclick') > 0 &&
+  src.indexOf('settings.epgShiftHours = normalizeEpgShift($("epgShiftHours").value);') > 0);
+
+/* odcisk zrodla EPG: dokad zrodlo i zakres dni sa te same, zapis ustawien nie
+   pobiera EPG od nowa (a wiec nie kasuje tego, co juz widac na liscie kanalow) */
+const epgKeyStart = src.indexOf("function epgKey(profile, url)");
+const epgKeyEnd = src.indexOf("function shiftPrograms(programs, hours)");
+if (epgKeyStart < 0 || epgKeyEnd <= epgKeyStart) throw new Error("Nie znalazlem epgKey w app.js");
+const keyBox = run(src.slice(epgKeyStart, epgKeyEnd), { settings: { archiveDays: 7 } });
+const liveProfile = { id: "p1", epgFileText: "" };
+check("odcisk zrodla EPG: ten sam profil i adres = te same programy",
+  keyBox.epgKey(liveProfile, "http://s/epg.xml") === keyBox.epgKey(liveProfile, "http://s/epg.xml") &&
+  keyBox.epgKey(liveProfile, "http://s/a.xml") !== keyBox.epgKey(liveProfile, "http://s/b.xml"),
+  keyBox.epgKey(liveProfile, "http://s/epg.xml"));
+check("odcisk zrodla EPG zmienia sie z plikiem, profilem i zakresem dni",
+  keyBox.epgKey({ id: "p1", epgFileText: "<xml/>" }, "http://s/a.xml") !==
+  keyBox.epgKey({ id: "p1", epgFileText: "" }, "http://s/a.xml") &&
+  keyBox.epgKey({ id: "p2", epgFileText: "" }, "http://s/a.xml") !==
+  keyBox.epgKey({ id: "p1", epgFileText: "" }, "http://s/a.xml") &&
+  (function () {
+    keyBox.settings.archiveDays = 14;
+    const other = keyBox.epgKey(liveProfile, "http://s/a.xml");
+    keyBox.settings.archiveDays = 7;
+    return other !== keyBox.epgKey(liveProfile, "http://s/a.xml");
+  })());
+check("zapis ustawien nie zaciaga EPG po raz drugi (loadCatalog pyta o odcisk zrodla)",
+  src.indexOf("if (state.epgKey && state.epgKey === epgKey(profile, state.epgUrl)) {") > 0 &&
+  src.indexOf("state.epgKey = epgKey(profile, epgUrl);") > 0 &&
+  src.indexOf("function clearEpg() {") > 0);
+
+/* --- 30. pasek odtwarzacza bez dublowanego zegara i z podpisem „odtwarzane” -- */
+check("pasek odtwarzacza nie dubluje zegara (godzina jest w rogu obrazu)",
+  html.indexOf('id="playerClock"') < 0 &&
+  css.indexOf(".player-clock") < 0 &&
+  src.indexOf('$("playerClock")') < 0);
+
+const watchStart = src.indexOf("function isWatchedProgram(program)");
+const watchEnd = src.indexOf("function programEntry(channel, program, fromPlayer)");
+if (watchStart < 0 || watchEnd <= watchStart) throw new Error("Nie znalazlem isWatchedProgram w app.js");
+const watchBox = run(src.slice(watchStart, watchEnd), { state: {} });
+const onAirEntry = { start: 100, end: 200, title: "X" };
+watchBox.state.watchProgram = { start: 100, end: 200 };
+check("lista programow rozpoznaje material odtwarzany teraz",
+  watchBox.isWatchedProgram(onAirEntry) === true &&
+  watchBox.isWatchedProgram({ start: 100, end: 300 }) === false &&
+  watchBox.isWatchedProgram(null) === false);
+watchBox.state.watchProgram = null;
+check("bez odtwarzania zaden wpis nie jest podpisany jako odtwarzany",
+  watchBox.isWatchedProgram(onAirEntry) === false);
+check("lista i siatka EPG podpisuja odtwarzany material, a lista staje na nim fokusem",
+  src.indexOf('playing.className = "program-playing";') > 0 &&
+  src.indexOf("archive.playingButton = button;") > 0 &&
+  src.indexOf('block.classList.toggle("playing", watching);') > 0 &&
+  src.indexOf("if (fromPlayer && playing) {") > 0 &&
+  css.indexOf(".program.playing {") > 0 &&
+  css.indexOf(".program-playing {") > 0 &&
+  src.indexOf('program_playing: "ODTWARZANE"') > 0 &&
+  src.indexOf('program_playing: "PLAYING"') > 0);
 
 console.log("");
 if (fails) { console.log("BLEDY: " + fails); process.exit(1); }

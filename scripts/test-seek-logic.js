@@ -712,6 +712,47 @@ check("nowy obraz gasi komunikat o skoku na srodku obrazu",
   h.els.playerToast.classList.contains("hidden"),
   JSON.stringify({ before: toastBefore, after: h.els.playerToast.textContent }));
 
+/* --- 4. nagranie programu, ktory sie skonczyl: okno to dlugosc programu -----
+   Serwer timeshiftu potrafi oddac wiecej, niz zamowilismy (np. 1:59:59 dla
+   programu godzinnego). Krok ⏩ nie moze wtedy wejsc w material z nastepnego
+   programu — zatrzymuje sie na granicy programu (patrz archiveProgramSeconds
+   i updateOsdProgress w app.js). */
+h = harness({
+  isArchive: true, duration: 7199, currentTime: 1200,
+  program: { start: NOW - 7200000, end: NOW - 3600000, title: "Film" }
+});
+h.api.seekBy(1);
+check("nagranie 1:59:59 dla programu godzinnego: ⏩ idzie krokiem po programie",
+  h.video.currentTime === 1210 && h.calls.goLive === 0,
+  "currentTime=" + h.video.currentTime);
+
+h = harness({
+  isArchive: true, duration: 7199, currentTime: 3595,
+  program: { start: NOW - 7200000, end: NOW - 3600000, title: "Film" }
+});
+h.api.seekBy(1);
+check("nagranie: ⏩ na koncu programu nie wchodzi w nastepny material",
+  h.video.currentTime === 3600 && h.calls.goLive === 0 && h.calls.play.length === 0,
+  "currentTime=" + h.video.currentTime);
+
+h = harness({
+  isArchive: true, vlc: true, vlcLength: 7199000, vlcTime: 3595000,
+  program: { start: NOW - 7200000, end: NOW - 3600000, title: "Film" }
+});
+h.api.seekBy(1);
+check("nagranie VLC: ⏩ tez zatrzymuje sie na granicy programu, nie na koncu nagrania",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 3600000,
+  JSON.stringify(h.calls.seek));
+
+h = harness({
+  isArchive: true, vlc: true, vlcLength: 7199000, vlcTime: 1000000,
+  program: { start: NOW - 7200000, end: NOW - 3600000, title: "Film" }
+});
+h.api.seekBy(-1);
+check("nagranie VLC: ⏪ w srodku programu idzie krokiem jak dotad",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 990000,
+  JSON.stringify(h.calls.seek));
+
 console.log("");
 if (fails) { console.log("BLEDY: " + fails); process.exit(1); }
 console.log("Wszystkie scenariusze przeszly.");
