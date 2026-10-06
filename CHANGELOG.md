@@ -20,6 +20,19 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.13] — 2026-10-07
+
+### Dodano
+- **Program TV pokazuje wszystkie kanały** — przycisk „EPG” w nagłówku otwiera siatkę całej listy kanałów, niezależnie od grupy wybranej na liście, a otwarcie z kanału (menu kanału, pasek odtwarzacza) stawia fokus na tym kanale.
+- **◀ ▶ w programie TV chodzą po programach tego samego kanału** — strzałki wybierają kolejny i poprzedni program tego kanału, a oś czasu rusza się dopiero wtedy, gdy po tej stronie nie ma już czego włączyć.
+
+### Poprawiono
+- **Program TV otwarty z kanału staje na tym, co leci teraz** — siatka dostaje fokus na bieżącym programie, a nie na przyciskach dnia, więc pilot od razu jest tam, gdzie leci obraz.
+- **„EPG” z menu kanału otwiera program TV tego kanału także na liście kanałów** — pozycja działa bez włączonego odtwarzacza, a nie tylko z paska odtwarzacza.
+- **„Pobierz EPG teraz” wygląda jak opcja w ustawieniach** — przycisk dostał obwódkę i rozmiar napisu taki jak pola obok, więc nie wygląda już jak przycisk główny ekranu.
+- **Lista rozwijana pod palcem pilota jest widoczna** — nazwa wiersza pogrubia się razem z polem, a sama lista dostaje akcentowe tło i grubszą obwódkę.
+- **Podpowiedź pilota w programie TV mówi o programach** — „◀ ▶ — programy • ▲ ▼ — kanały”, a tabela w Pomocy opisuje, że strzałki w bok chodzą po programach tego samego kanału.
+
 ## [2.1.12] — 2026-10-06
 
 ### Dodano

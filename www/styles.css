@@ -1266,3 +1266,36 @@ body.uimode-tv .diag-hint { font-size: 17px; }
    w bok, a nie łamie) */
 body.uimode-touch .diag-text { overflow: auto; }
 
+/* ==========================================================================
+   2.1.13 — czytelność ustawień EPG i nawigacja po programach w programie TV
+   ========================================================================== */
+
+/* „Pobierz EPG teraz” stał bez ramki i napisem większym niż pola obok, więc
+   wyglądał jak przycisk główny, a nie jak opcja w wierszu ustawień. Teraz ma
+   ten sam rozmiar i obwódkę co reszta (patrz #settingsBack). */
+#epgRefreshNow {
+  padding: 13px 20px;
+  margin: 0 0 18px;
+  font-size: 18px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+}
+body.uimode-tv #epgRefreshNow { padding: 14px 22px; font-size: 21px; }
+
+/* Która zmienna jest pod palcem: nazwa wiersza świeci razem z polem, a sama
+   lista rozwijana dostaje akcentowe tło i grubszą obwódkę. Cienka niebieska
+   ramka wokół 240-pikselowego pola gubiła się w kolumnie ustawień — na
+   telewizorze nie było widać, co się właśnie zmienia. */
+body.uimode-tv .settings-card label:focus-within > span {
+  color: var(--text);
+  font-weight: 700;
+}
+body.uimode-tv .settings-card .row-label select:focus {
+  background: rgba(91, 140, 255, .22);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .28);
+  outline: 4px solid var(--accent);
+  outline-offset: 3px;
+}
+

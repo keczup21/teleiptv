@@ -21,7 +21,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.12";
+  var APP_VERSION = "2.1.13";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -358,7 +358,7 @@
     appearance: "WYGLĄD I JĘZYK", language: "Język", theme: "Motyw", theme_dark: "Ciemny", theme_light: "Jasny",
     search: "Szukaj", refresh: "Odśwież", guide_title: "Program TV", guide_prev_day: "‹ Dzień",
     guide_next_day: "Dzień ›", guide_yesterday: "Wczoraj", guide_day_before: "Przedwczoraj", today: "Dziś", date: "Data", time: "Godzina",
-    guide_pan_hint: "◀ ▶ — przewijanie godzin • ▲ ▼ — kanały",
+    guide_pan_hint: "◀ ▶ — programy • ▲ ▼ — kanały",
     back: "Wstecz", live: "LIVE", catchup: "CATCH-UP", archive: "Archiwum",
     program_playing: "ODTWARZANE",
     loading: "Pobieranie…", all: "Wszystkie", favorites: "★ Ulubione", recent: "Ostatnio oglądane",
@@ -616,7 +616,7 @@
     help_nav_back: "Zamyka nakładkę albo wraca o ekran wstecz. Na liście kanałów pyta, czy wyjść z aplikacji.",
     help_epg: "PROGRAM TV (EPG)",
     help_epg_grid: "Przycisk „EPG” w nagłówku otwiera siatkę wszystkich kanałów na osi czasu. Program, który leci teraz, ma podpis LIVE, a pionowa linia pokazuje bieżącą godzinę.",
-    help_epg_pan: "Przewijanie osi czasu o godzinę — dowolnie daleko w obie strony. ▲ ▼ chodzą po kanałach, a z górnego wiersza ▲ wraca do przycisków dnia.",
+    help_epg_pan: "◀ ▶ chodzą po programach tego samego kanału, a gdy programy się skończą — po osi czasu, dowolnie daleko w obie strony. ▲ ▼ chodzą po kanałach, a z górnego wiersza ▲ wraca do przycisków dnia.",
     help_epg_days: "Skok o dzień wstecz albo w przód; obok są pola daty i godziny do wskazania dokładnej chwili.",
     help_epg_pick: "Zakończony program włącza się z archiwum, a ten, który leci teraz — na żywo.",
     help_catchup: "ARCHIWUM I CATCH-UP",
@@ -669,7 +669,7 @@
     appearance: "APPEARANCE & LANGUAGE", language: "Language", theme: "Theme", theme_dark: "Dark", theme_light: "Light",
     search: "Search", refresh: "Refresh", guide_title: "TV Guide", guide_prev_day: "‹ Day",
     guide_next_day: "Day ›", guide_yesterday: "Yesterday", guide_day_before: "2 days ago", today: "Today", date: "Date", time: "Time",
-    guide_pan_hint: "◀ ▶ — shift hours • ▲ ▼ — channels",
+    guide_pan_hint: "◀ ▶ — programmes • ▲ ▼ — channels",
     back: "Back", live: "LIVE", catchup: "CATCH-UP", archive: "Archive",
     program_playing: "PLAYING",
     loading: "Loading…", all: "All", favorites: "★ Favorites", recent: "Recently watched",
@@ -923,7 +923,7 @@
     help_nav_back: "Closes an overlay or goes one screen back. On the channel list it asks whether to quit the app.",
     help_epg: "TV GUIDE (EPG)",
     help_epg_grid: "The “EPG” button in the header opens a grid of all channels on a time axis. The programme on air carries a LIVE tag and the vertical line marks the current time.",
-    help_epg_pan: "Shifts the time axis by an hour — as far back or forward as you like. ▲ ▼ walk through the channels, and ▲ from the top row returns to the day buttons.",
+    help_epg_pan: "The ◀ ▶ arrows step through the programmes of the same channel, and shift the time axis once they run out — as far back or forward as you like. ▲ ▼ walk through the channels, and ▲ from the top row returns to the day buttons.",
     help_epg_days: "Jumps a day back or forward; the date and time fields next to it jump to an exact moment.",
     help_epg_pick: "A finished programme plays from the archive, the one on air goes live.",
     help_catchup: "ARCHIVE AND CATCH-UP",
@@ -1456,10 +1456,18 @@
     /* zegar linii bieżącej godziny chodzi tylko na widocznym programie TV */
     if (id !== "guideScreen") stopGuideNowLine();
     window.setTimeout(function () {
+      /* Ekran mógł już ustawić fokus sam: program TV po narysowaniu siatki
+         staje na programie, który leci teraz (patrz focusGuideWatched). Bez
+         tego warunku to odroczone ustawienie zabierało mu fokus po 30 ms —
+         podświetlenie z siatki uciekało na przycisk dnia i dopiero ▼ wchodziło
+         w program, który i tak był wybrany. */
+      var active = document.activeElement;
+      var screen = $(id);
+      if (active && screen && active !== document.body && screen.contains(active)) return;
       /* fokus wchodzi na przycisk, nigdy na pole tekstowe: na telewizorze
          klawiatura ekranowa zasłaniałaby listę, a po zapisaniu ustawień samo
          włączało się szukanie kanałów (patrz entryFocusTarget) */
-      var first = entryFocusTarget($(id));
+      var first = entryFocusTarget(screen);
       if (first && first.focus) first.focus();
     }, 30);
   }
@@ -7227,20 +7235,18 @@
 
   /* ==============================  PROGRAM TV  ============================== */
 
+  /* Program TV pokazuje wszystkie kanały — EPG z nagłówka ma być pełne, bez
+     względu na to, jaka grupa jest wybrana na liście kanałów. Kanał, na którym
+     ma stanąć fokus, wybiera się kluczem (guide.focusKey), a nie filtrowaniem
+     listy: inaczej w „Ulubionych” EPG pokazywałoby kilka wierszy i nie byłoby
+     po czym chodzić pilotem. */
   function guideChannels() {
-    var name = state.selectedGroup;
-    return state.channels.filter(function (channel) {
-      if (name === "@all") return true;
-      if (name === "@favorites") return isFavorite(channel);
-      if (name === "@recent") {
-        return perProfile(settings.recentChannels).indexOf(keyOf(channel)) >= 0;
-      }
-      return channel.group === name;
-    });
+    return state.channels;
   }
 
-  /* Program TV. Bez argumentów pokazuje całą kategorię; z kanałem (otwarcie
-     z paska odtwarzacza) staje na oglądanym kanale i wraca potem do obrazu. */
+  /* Program TV. Bez kanału otwiera się na początku listy; z kanałem (opcje
+     kanału na liście i w pasku odtwarzacza) staje na tym, co leci teraz, i
+     wraca potem tam, skąd przyszedł. */
   function openGuide(options) {
     var opts = options || {};
     var now = Date.now();
@@ -7330,6 +7336,71 @@
   function guidePan(hours) {
     var next = guide.windowStart + hours * 3600000;
     guideSetWindow(next - (next % 3600000));
+  }
+
+  /* Programy w wierszu, które da się wybrać pilotem. Kafelki z przyszłości
+     i te bez archiwum są zablokowane (patrz buildGuideProgram), dlatego ◀ ▶
+     muszą je przeskakiwać — inaczej zatrzymałyby się na czymś, czego nie da
+     się włączyć. */
+  function guideEnabledBlocks(row) {
+    return row ? row.querySelectorAll(".guide-program:not([disabled])") : [];
+  }
+
+  /* Sąsiedni program tego samego kanału z danych EPG: dir > 0 w przód, inaczej
+     w tył. Lista programów jest posortowana, więc wystarczy jedno przejście. */
+  function guideNeighbourProgram(channel, time, dir) {
+    var list = programsFor(channel);
+    var now = Date.now();
+    var canCatchup = hasArchive(channel);
+    var found = null;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (p.start > now) break;                    /* dalej są już tylko przyszłe */
+      if (p.end <= now && !canCatchup) continue;   /* minęło, a archiwum nie ma */
+      if (dir > 0) {
+        if (p.start >= time) return p;
+      } else if (p.end <= time) {
+        found = p;                                 /* ostatni przed tym momentem */
+      }
+    }
+    return found;
+  }
+
+  /* ◀ ▶ chodzą po programach tego samego kanału. Gdy sąsiedniego programu nie
+     ma już na osi, widok dosuwa się tak, żeby ten program było widać — godzina
+     (dzień) zmienia się więc dopiero na skraju widocznego zakresu, a nie przy
+     każdym naciśnięciu strzałki. ▲ ▼ nadal chodzą po kanałach. */
+  function guideStepProgram(dir) {
+    var active = document.activeElement;
+    var inBlock = !!(active && active.classList && active.classList.contains("guide-program"));
+    var row = inBlock && active.closest ? active.closest(".guide-row") : null;
+    if (!row) {
+      /* fokus jest w nagłówku albo na polu daty — strzałka przesuwa całą oś */
+      guidePan(dir);
+      return;
+    }
+    var blocks = guideEnabledBlocks(row);
+    var index = Array.prototype.indexOf.call(blocks, active);
+    var next = index < 0 ? null : blocks[index + dir];
+    if (next) {
+      focusKeepScroll(next);
+      revealGuideBlock(next);
+      return;
+    }
+    /* Skraj osi: sąsiedni program bierzemy z danych kanału, bo kafelek poza
+       oknem nie istnieje. Okno ustawiamy na jego godzinę (z zaokrągleniem do
+       pełnej, jak każdy przeskok osi — patrz guideSetWindow), a fokus stawiamy
+       na tym programie, tak samo jak robi to guideRedraw. */
+    var rowIndex = guideFocusRowIndex();
+    var channel = rowIndex >= 0 ? guide.items[rowIndex] : null;
+    var edge = parseInt(active.getAttribute(dir > 0 ? "data-end" : "data-start"), 10);
+    var target = channel && isFinite(edge) ? guideNeighbourProgram(channel, edge, dir) : null;
+    if (!target) {
+      guidePan(dir);
+      return;
+    }
+    guideSetWindow(target.start - (target.start % 3600000));
+    focusGuideRowBlock(rowIndex, target.start + 1, 0);
   }
 
   /* skok do dnia względem dziś (0 = dziś, -1 = wczoraj, -2 = przedwczoraj)
@@ -8462,8 +8533,10 @@
 
     actions.appendChild(ctxButton(t("ctx_epg"), function () {
       hideContextMenu();
+      /* Program TV staje na tym kanale — także poza odtwarzaczem, żeby od razu
+         było widać, co leci teraz, bez szukania wiersza na liście */
       if (inPlayer) openGuide({ channel: target, returnTo: "playerScreen" });
-      else openGuide();
+      else openGuide({ channel: target });
     }));
 
     if (inPlayer) {
@@ -8981,11 +9054,12 @@
       return;
     }
 
-    /* Program TV: ◀ ▶ przewijają oś czasu o godzinę (dowolnie daleko w obie
-       strony); przy polach daty/godziny strzałki obsługuje sam formularz */
+    /* Program TV: ◀ ▶ chodzą po programach tego samego kanału, a gdy programy
+       się skończą — po osi czasu o godzinę (patrz guideStepProgram); przy polach
+       daty/godziny strzałki obsługuje sam formularz */
     if (inGuide && (key === 37 || key === 39 || key === 412 || key === 417)) {
       event.preventDefault();
-      guidePan(key === 37 || key === 412 ? -1 : 1);
+      guideStepProgram(key === 37 || key === 412 ? -1 : 1);
       return;
     }
 

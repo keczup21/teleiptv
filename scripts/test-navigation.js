@@ -322,7 +322,8 @@ check("samo dojechanie fokusem na grupe nie przelacza juz listy kanalow",
 check("renderCategories() uzywa nextFocusAfterGroup()",
   src.indexOf('if (nextFocusAfterGroup(isTvMode()) === "channels") focusChannelEntry();') > 0);
 check("showScreen() stawia fokus przez entryFocusTarget(), nie na pierwszym polu",
-  src.indexOf("var first = entryFocusTarget($(id));") > 0 &&
+  src.indexOf("var first = entryFocusTarget(screen);") > 0 &&
+  src.indexOf("var screen = $(id);") > 0 &&
   src.indexOf("$(id).querySelector('[tabindex=\"0\"],button,input,select')") < 0);
 check("po wczytaniu playlisty fokus wchodzi w liste kanalow (nie w pole szukania)",
   src.indexOf('if (isTvMode() && document.activeElement !== $("searchInput")) focusChannelEntry();') > 0);
@@ -374,7 +375,7 @@ check("napisy z ikona z index.html przechodza przez setIconLabel",
 check("napis z ikona poza przyciskiem zostaje tekstem (legenda pilota)",
   src.indexOf('if (els[i].tagName === "BUTTON" && iconForLabel(v)) setIconLabel(els[i], v);') > 0 &&
   html.indexOf('<span id="guidePanHint"') > 0 &&
-  icons.iconForLabel("◀ ▶ — przewijanie godzin • ▲ ▼ — kanały") === "prev");
+  icons.iconForLabel("◀ ▶ — programy • ▲ ▼ — kanały") === "prev");
 
 /* Naglowek listy mial jeszcze dawny znaczek (monitor z antenka), mimo ze od
    2.0.1 obowiazuje nowe logo, a od 2.0.4 ma byc takze tutaj. Logo w naglowku
@@ -674,6 +675,24 @@ check("pozostale listy (<option>) maja wlasne tlo, a nie systemowe",
 check("lista wyboru powstaje przy starcie, a wartosc z profilu ja odswieza",
   src.indexOf("\n  buildChoiceRows();") > 0 && src.indexOf("\n    syncChoiceRows();") > 0);
 
+/* Fokus na liście rozwijanej w ustawieniach: podświetla się cały wiersz (nazwa
+   zmiennej świeci razem z polem), a lista dostaje akcentowe tło i grubszą
+   obwódkę. Sama cienka ramka wokół 240-pikselowego pola gubiła się w kolumnie
+   ustawień — na telewizorze nie było widać, czy zmienia się „Dni EPG”, krok
+   przewijania, próby ponownego uruchomienia, odświeżanie EPG czy przesunięcie
+   czasu EPG. */
+const rowSelectIds = ["archiveDays", "seekSeconds", "retryAttempts", "epgRefreshMinutes", "epgShiftHours"];
+const notInRow = rowSelectIds.filter(function (id) {
+  const at = html.indexOf('id="' + id + '"');
+  const open = html.lastIndexOf('<label class="row-label">', at);
+  return at < 0 || open < 0 || html.lastIndexOf("</label>", at) > open;
+});
+check("listy rozwijane z EPG siedza w wierszach ustawien (" + rowSelectIds.length + " pol)",
+  notInRow.length === 0, notInRow.join(", "));
+check("fokus na liscie rozwijanej widac razem z nazwa wiersza",
+  css.indexOf("body.uimode-tv .settings-card label:focus-within > span") > 0 &&
+  /body\.uimode-tv \.settings-card \.row-label select:focus\s*\{[^}]*background: rgba\(91, 140, 255, \.22\)[^}]*outline: 4px solid var\(--accent\)/.test(css));
+
 /* --- 14. program TV: podpis „LIVE”, podświetlenie do catch-up, linia godziny --
    Program, który leci teraz, dostaje podpis „LIVE” i samą obwódkę akcentu,
    a mocne podświetlenie (gradient) należy do programu wybieranego pilotem —
@@ -902,16 +921,16 @@ check("klawisz wyslany dopiero na zwolnieniu tez przewija - i tylko raz",
    Program TV rysował wiersze tylko dla 60 kanałów, a przy 5000 kanałów zaciąłby
    telewizor. Teraz w DOM jest tylko widok z zapasem (GUIDE_CHUNK / GUIDE_OVERSCAN),
    a brakujące kanały udają odstępy — dzięki temu siatka pokazuje wszystkie kanały
-   kategorii, a rysowanie jednej porcji jest zawsze tak samo tanie. Okno jest
+   listy, a rysowanie jednej porcji jest zawsze tak samo tanie. Okno jest
    większe (godziny liczą się z realnej szerokości ekranu, nagłówek jest mniejszy),
    a kafelki czytelniejsze (wyższy wiersz, tytuł w dwóch liniach, pasek postępu).
    Start EPG jest odroczony, żeby pobieranie nie zamroziło uruchomienia. */
-check("siatka pokazuje wszystkie kanaly kategorii (bez ucinania listy)",
+check("siatka pokazuje wszystkie kanaly (bez ucinania listy)",
   src.indexOf("var GUIDE_CHUNK = 16;") > 0 &&
   src.indexOf("var GUIDE_OVERSCAN = 24;") > 0 &&
   src.indexOf("var GUIDE_AHEAD = 8;") > 0 &&
   src.indexOf("GUIDE_ROWS") < 0 && src.indexOf("guide_limited") < 0 &&
-  src.indexOf('if (name === "@all") return true;') > 0);
+  src.indexOf("guide.items = guideChannels();") > 0);
 check("brakujace kanaly udaja odstepy o wysokosci wiersza (padding siatki)",
   src.indexOf("function guideUpdateSpacers()") > 0 &&
   src.indexOf("wrap.style.paddingTop = (guide.winStart * guide.rowHeight)") > 0 &&
@@ -992,13 +1011,166 @@ check("napis zakresu podaje liczbe kanalow (bez „pokazano 60 z …”)",
   src.indexOf('guide_count: "kanałów: {count}"') > 0 &&
   src.indexOf('guide_count: "channels: {count}"') > 0 &&
   src.indexOf("guide_limited") < 0);
-check("podpowiedz pilota pod siatka mowi o kanalach i powrocie do dni",
-  src.indexOf('guide_pan_hint: "◀ ▶ — przewijanie godzin • ▲ ▼ — kanały"') > 0 &&
+check("podpowiedz pilota pod siatka mowi o programach, kanalach i powrocie do dni",
+  src.indexOf('guide_pan_hint: "◀ ▶ — programy • ▲ ▼ — kanały"') > 0 &&
   src.indexOf("help_epg_pan:") > 0 &&
-  src.indexOf("▲ ▼ chodzą po kanałach") > 0);
+  src.indexOf("▲ ▼ chodzą po kanałach") > 0 &&
+  src.indexOf("◀ ▶ chodzą po programach tego samego kanału") > 0 &&
+  html.indexOf("◀ ▶ chodzą po programach tego samego kanału") > 0);
 check("z gornego wiersza ▲ wraca do przyciskow dnia",
   src.indexOf("if (keyCode === 38) focusGuideHeader();") > 0 &&
   src.indexOf('var target = $("guideToday") || $("guideClose");') > 0);
+
+/* Program TV z nagłówka ma pokazywać wszystkie kanały, a nie tylko wybraną
+   grupę. W „Ulubionych” albo w małej grupie siatka miała kilka wierszy, więc
+   nie było po czym chodzić pilotem i EPG wyglądało na puste. Kanał, na którym
+   ma stanąć fokus, wybiera się kluczem (guide.focusKey), a nie filtrowaniem. */
+const guideChannelsAt = src.indexOf("function guideChannels()");
+const guideChannelsBody = guideChannelsAt < 0 ? "" :
+  src.slice(guideChannelsAt, src.indexOf("\n  }", guideChannelsAt));
+check("program TV pokazuje wszystkie kanaly (nie tylko wybrana grupe)",
+  guideChannelsBody.indexOf("return state.channels;") > 0 &&
+  guideChannelsBody.indexOf("selectedGroup") < 0);
+
+/* EPG otwarte z kanału ma od razu stać na tym, co leci teraz (także z opcji
+   kanału na liście). Fokus ustawia focusGuideWatched(), a odroczony fokus
+   ekranu (showScreen) nie może mu go zabrać — po tym zabraniu podświetlenie
+   lądowało na przycisku dnia i dopiero ▼ wchodziło w program, który i tak był
+   wybrany, więc wyglądało to jak brak „live”. */
+check("EPG z kanalu staje na tym, co leci teraz, i nie gubi fokusu",
+  src.indexOf("function focusGuideWatched()") > 0 &&
+  src.indexOf("if (active && screen && active !== document.body && screen.contains(active)) return;") > 0 &&
+  src.indexOf('if (inPlayer) openGuide({ channel: target, returnTo: "playerScreen" });') > 0 &&
+  src.indexOf("else openGuide({ channel: target });") > 0);
+
+/* ◀ ▶ chodzą po programach tego samego kanału, a oś czasu (godzina, dzień)
+   rusza się dopiero wtedy, gdy sąsiedniego programu nie ma już na widoku —
+   tak jak ▲ ▼ zmieniają kanał dopiero na końcu listy. */
+check("◀ ▶ chodza po programach tego samego kanalu",
+  src.indexOf("function guideStepProgram(dir)") > 0 &&
+  src.indexOf("guideStepProgram(key === 37 || key === 412 ? -1 : 1);") > 0 &&
+  src.indexOf("guidePan(key === 37 || key === 412 ? -1 : 1);") < 0 &&
+  src.indexOf("focusKeepScroll(next);\n      revealGuideBlock(next);") > 0);
+check("os czasu przesuwa sie dopiero na skraju widocznych programow",
+  src.indexOf("function guideNeighbourProgram(channel, time, dir)") > 0 &&
+  src.indexOf("guideSetWindow(target.start - (target.start % 3600000));") > 0 &&
+  src.indexOf("focusGuideRowBlock(rowIndex, target.start + 1, 0);") > 0 &&
+  /* kafelki z przyszłości i te bez archiwum są zablokowane, więc ◀ ▶ muszą je
+     przeskakiwać — inaczej fokus stanąłby na czymś, czego nie da się włączyć */
+  src.indexOf('row ? row.querySelectorAll(".guide-program:not([disabled])") : [];') > 0);
+
+/* --- sąsiedni program z danych EPG (to, czego nie ma na osi) ---------------
+   Kafelki z przyszłości i te bez archiwum są zablokowane, więc ◀ ▶ nie mogą
+   się na nich zatrzymać — inaczej pilot stanąłby na czymś, czego nie da się
+   włączyć. Funkcja chodzi po danych kanału, bo kafelek poza oknem nie istnieje. */
+const neighbourAt = src.indexOf("function guideNeighbourProgram(channel, time, dir)");
+const neighbourEnd = src.indexOf("\n  }", neighbourAt) + 4;
+if (neighbourAt < 0) throw new Error("Nie znalazlem guideNeighbourProgram w app.js");
+/* szukanie programów kanału bierzemy z app.js (tvgId, nazwa, alias), żeby test
+   nie powtarzał tej logiki */
+const programsAt = src.indexOf("function programsFor(channel)");
+const programsEnd = src.indexOf("\n  }", programsAt) + 4;
+const NOW_EPG = 1700000000000;
+const EPG_LIST = [
+  { start: NOW_EPG - 7200000, end: NOW_EPG - 5400000, title: "dawny" },
+  { start: NOW_EPG - 5400000, end: NOW_EPG - 3600000, title: "poprzedni" },
+  { start: NOW_EPG - 1800000, end: NOW_EPG + 1800000, title: "teraz" },
+  { start: NOW_EPG + 1800000, end: NOW_EPG + 5400000, title: "nastepny" }
+];
+const neighbourBox = run(src.slice(programsAt, programsEnd) + src.slice(neighbourAt, neighbourEnd), {
+  Date: { now: function () { return NOW_EPG; } },
+  state: { programs: { c1: EPG_LIST, c2: EPG_LIST } },
+  epgAliases: {},
+  /* kanał bez archiwum: wszystko, co minęło, jest zablokowane */
+  hasArchive: function (channel) { return !!channel.catchupSource; }
+});
+const plainChannel = { name: "C1", tvgId: "c1" };
+const archChannel = { name: "C2", tvgId: "c2", catchupSource: "?utc={utc}" };
+check("bez archiwum ◀ nie cofa sie na program, ktorego nie da sie wlaczyc",
+  neighbourBox.guideNeighbourProgram(plainChannel, NOW_EPG - 1800000, -1) === null &&
+  neighbourBox.guideNeighbourProgram(plainChannel, NOW_EPG + 1800000, 1) === null);
+check("z archiwum ◀ znajduje poprzedni program, a ▶ nigdy nie wchodzi w przyszlosc",
+  neighbourBox.guideNeighbourProgram(archChannel, NOW_EPG - 1800000, -1).title === "poprzedni" &&
+  neighbourBox.guideNeighbourProgram(archChannel, NOW_EPG + 1800000, -1).title === "teraz" &&
+  neighbourBox.guideNeighbourProgram(archChannel, NOW_EPG + 1800000, 1) === null);
+
+/* --- ◀ ▶ chodzą po programach: co dokładnie robi guideStepProgram ----------
+   Wiersz obsługujemy przez podmienione funkcje siatki (fokus, dosunięcie,
+   przeskok osi), dzięki czemu widać, kiedy idzie program, a kiedy oś czasu. */
+const stepAt = src.indexOf("function guideStepProgram(dir)");
+const stepEnd = src.indexOf("\n  }", stepAt) + 4;
+if (stepAt < 0) throw new Error("Nie znalazlem guideStepProgram w app.js");
+function stepHarness(o) {
+  const calls = { focused: [], revealed: [], panned: [], windows: [], rowBlocks: [] };
+  const sandbox = {
+    document: { activeElement: o.active },
+    guide: { items: o.items || [] },
+    guideEnabledBlocks: function () { return o.blocks || []; },
+    focusKeepScroll: function (el) { calls.focused.push(el); },
+    revealGuideBlock: function (el) { calls.revealed.push(el); },
+    guidePan: function (dir) { calls.panned.push(dir); },
+    guideFocusRowIndex: function () { return o.rowIndex === undefined ? 0 : o.rowIndex; },
+    guideNeighbourProgram: function (channel, time, dir) {
+      calls.neighbour = [channel, time, dir];
+      return o.target || null;
+    },
+    guideSetWindow: function (start) { calls.windows.push(start); },
+    focusGuideRowBlock: function (index, time, sameTime) { calls.rowBlocks.push([index, time, sameTime]); }
+  };
+  run(src.slice(stepAt, stepEnd), sandbox);
+  return { calls: calls, step: sandbox.guideStepProgram };
+}
+function fakeBlock(id) {
+  return {
+    id: id,
+    classList: { contains: function (c) { return c === "guide-program"; } },
+    closest: function () { return {}; }
+  };
+}
+function headerButton() {
+  return { classList: { contains: function () { return false; } }, closest: function () { return null; } };
+}
+(function () {
+  const a = fakeBlock("a");
+  const b = fakeBlock("b");
+  const h = stepHarness({ blocks: [a, b], active: b });
+  h.step(-1);
+  check("◀ idzie na poprzedni program tego samego kanalu (bez ruszania osi)",
+    h.calls.focused[0] === a && h.calls.revealed[0] === a && h.calls.panned.length === 0 &&
+    h.calls.windows.length === 0);
+})();
+(function () {
+  const first = fakeBlock("first");
+  const channel = { name: "Kanal" };
+  const target = { start: 5000000 + 1234000, end: 5000000 + 3000000 };
+  const h = stepHarness({
+    blocks: [first], active: first, rowIndex: 3, items: [{}, {}, {}, channel], target: target
+  });
+  first.getAttribute = function (name) { return name === "data-start" ? "5000000" : "6000000"; };
+  h.step(-1);
+  const win = target.start - (target.start % 3600000);
+  check("na skraju osi widok dosuwa sie do poprzedniego programu (godzina z zaokragleniem)",
+    h.calls.panned.length === 0 && h.calls.neighbour[0] === channel &&
+    h.calls.neighbour[1] === 5000000 && h.calls.neighbour[2] === -1 &&
+    h.calls.windows[0] === win && win % 3600000 === 0 &&
+    h.calls.rowBlocks[0][0] === 3 && h.calls.rowBlocks[0][1] === target.start + 1 &&
+    h.calls.rowBlocks[0][2] === 0);
+})();
+(function () {
+  const live = fakeBlock("live");
+  const h = stepHarness({ blocks: [live], active: live, items: [{ name: "Kanal" }], target: null });
+  live.getAttribute = function () { return "9000000"; };
+  h.step(1);
+  check("gdy nie ma juz czego wlaczyc, ▶ przesuwa os czasu o godzine",
+    h.calls.panned[0] === 1 && h.calls.windows.length === 0 &&
+    h.calls.neighbour[1] === 9000000 && h.calls.neighbour[2] === 1);
+})();
+(function () {
+  const h = stepHarness({ active: headerButton() });
+  h.step(-1);
+  check("fokus w naglowku: ◀ nadal przesuwa os czasu",
+    h.calls.panned[0] === -1 && h.calls.focused.length === 0 && h.calls.windows.length === 0);
+})();
 check("start EPG jest odroczony (lista kanalow rysuje sie od razu)",
   src.indexOf("function scheduleEpgStart(profile, epgUrl)") > 0 &&
   src.indexOf("window.requestIdleCallback(run, { timeout: 4000 })") > 0 &&
@@ -3539,6 +3711,13 @@ check("EPG: surowy wynik + przesuniecie, wiec zmiana ustawienia nic nie pobiera"
   src.indexOf('$("epgShiftHours").onchange') > 0 &&
   src.indexOf('$("epgRefreshNow").onclick') > 0 &&
   src.indexOf('settings.epgShiftHours = normalizeEpgShift($("epgShiftHours").value);') > 0);
+
+/* „Pobierz EPG teraz” wyglądał jak przycisk główny: nie miał żadnej obwódki,
+   a napis brał się z body (22 px), gdy listy i podpisy obok mają 18 px. Teraz
+   trzyma rozmiar i ramkę reszty ustawień (jak #settingsBack). */
+check("przycisk „Pobierz EPG teraz” ma obwodke i napis jak pola obok",
+  /#epgRefreshNow\s*\{[^}]*font-size: 18px[^}]*border: 2px solid var\(--border\)/.test(css) &&
+  css.indexOf("body.uimode-tv #epgRefreshNow { padding: 14px 22px; font-size: 21px; }") > 0);
 
 /* odcisk zrodla EPG: dokad zrodlo i zakres dni sa te same, zapis ustawien nie
    pobiera EPG od nowa (a wiec nie kasuje tego, co juz widac na liscie kanalow) */
