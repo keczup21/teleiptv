@@ -25,6 +25,15 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.15] — 2026-10-07
+
+### Zmieniono
+- **Pilot w programie TV steruje samym podświetleniem** — ◀ ▶ przechodzą po programach tego samego kanału (także po tych, które dopiero będą), a ▲ ▼ o jeden kanał wyżej albo niżej, na program z tego samego momentu.
+- **Oś czasu w programie TV dosuwa się razem z podświetleniem** — godziny ruszają się tylko wtedy, gdy podświetlonego programu nie widać w całości, więc strzałki nie przewijają osi same z siebie.
+
+### Poprawiono
+- **„EPG” w odtwarzaczu staje od razu na programie, który leci teraz** — lista programów kanału dostaje fokus na programie bieżącym, a nie na wpisach z przyszłości, które stoją na górze listy.
+
 ## [2.1.14] — 2026-10-07
 
 ### Zmieniono

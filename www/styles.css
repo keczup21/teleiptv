@@ -437,7 +437,12 @@ aside {
   transform: none;
 }
 .guide-program:focus time, .guide-program:focus span { color: #fff; }
-.guide-program:disabled { cursor: default; }
+/* Program, którego nie da się włączyć (przyszłość albo brak archiwum), jest
+   zaznaczalny pilotem — inaczej ◀ ▶ nie przesuwałyby po nim podświetlenia —
+   ale wygląda na nieaktywny i po naciśnięciu nic nie robi. */
+.guide-program.blocked { cursor: default; }
+.guide-program.blocked:not(.past) { opacity: .7; }
+.guide-program.blocked:focus, .guide-program.blocked:focus-visible { opacity: 1; }
 
 /* Linia bieżącej godziny: pionowa kreska przez całą wysokość siatki, a u góry
    (pod osią czasu) podpis z aktualną godziną. Rysuje ją renderGuide(), a co
