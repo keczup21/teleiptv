@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.16";
+  var APP_VERSION = "2.1.17";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -74,6 +74,11 @@
      wtedy węższa (tyle, ile zostaje miejsca), ale nigdy węższa niż
      GUIDE_HOUR_FIT_W — patrz guideHourWidth. */
   var GUIDE_HOUR_FIT_W = 120;
+  /* Poniżej tej szerokości kafelek jest za wąski na nazwę programu i plakietkę
+     „LIVE”/„ODTWARZANE” naraz: pill brał całe miejsce, a tytuł zostawał samym
+     wielokropkiem (krótki program, np. 15-minutowy, był nieczytelny). Wtedy
+     plakietkę pomijamy — patrz buildGuideProgram. */
+  var GUIDE_PILL_MIN_W = 120;
   /* Szerokość kolumny z nazwami kanałów w programie TV — tyle samo co
      w styles.css (.guide-channel i .guide-corner). Potrzebna, żeby linia
      bieżącej godziny wypadła dokładnie na początku osi czasu, także wtedy, gdy
@@ -3544,16 +3549,20 @@
     label.className = "program-title";
     label.textContent = program.title;
     row.appendChild(label);
+    /* Podpis stoi w tej samej linii co nazwa, po myślniku („Strażnik Teksasu
+       - LIVE”), a nie w osobnej linii pod nią — tak czyta to oko na liście. */
     if (watching) {
       /* to ten materiał leci teraz w odtwarzaczu — podpis mówi to wprost, a na
          liście otwartej z paska „EPG” fokus staje właśnie tutaj (patrz
          openArchive) */
+      row.appendChild(document.createTextNode(" - "));
       var playing = document.createElement("em");
       playing.className = "program-playing";
       playing.textContent = t("program_playing");
       row.appendChild(playing);
       archive.playingButton = button;
     } else if (isNow) {
+      row.appendChild(document.createTextNode(" - "));
       var live = document.createElement("em");
       live.className = "guide-live";
       live.textContent = t("live");
@@ -7888,6 +7897,11 @@
     block.classList.toggle("past", isPast);
     block.classList.toggle("now", isNow);
     block.classList.toggle("playing", watching);
+    /* Krótki program na osi: kafelek jest za wąski na nazwę i plakietkę naraz
+       (patrz niżej). Wariant „narrow” daje nazwie więcej miejsca — mniejszy
+       oddech i czcionka (styles.css), a plakietkę pomijamy. */
+    var wide = width >= GUIDE_PILL_MIN_W;
+    if (!wide) block.classList.add("narrow");
     /* Programu z przyszłości (i tego bez archiwum) nie da się włączyć, ale ma
        zostać na osi: pilot staje na nim i czyta, co będzie — inaczej ◀ ▶ nie
        dałoby się przesuwać podświetlenia w przód po programach (patrz
@@ -7911,16 +7925,25 @@
     /* program, który leci teraz, dostaje podpis „LIVE”; materiał odtwarzany
        z archiwum — własny podpis („odtwarzane”), żeby na siatce było widać, co
        leci, także wtedy, gdy to nie jest program bieżący */
+    /* Wąski kafelek (krótki program na osi) nie pomieści naraz nazwy i
+       plakietki: pill brał całą szerokość, a tytuł uciekał do samego
+       wielokropka. Poniżej GUIDE_PILL_MIN_W plakietkę pomijamy — nazwa jest
+       ważniejsza, a że to program bieżący (albo odtwarzany), zdradza już
+       obwódka akcentu (patrz .guide-program.now / .playing). */
     if (watching) {
-      var playing = document.createElement("em");
-      playing.className = "program-playing";
-      playing.textContent = t("program_playing");
-      titleRow.appendChild(playing);
+      if (wide) {
+        var playing = document.createElement("em");
+        playing.className = "program-playing";
+        playing.textContent = t("program_playing");
+        titleRow.appendChild(playing);
+      }
     } else if (isNow) {
-      var live = document.createElement("em");
-      live.className = "guide-live";
-      live.textContent = t("live");
-      titleRow.appendChild(live);
+      if (wide) {
+        var live = document.createElement("em");
+        live.className = "guide-live";
+        live.textContent = t("live");
+        titleRow.appendChild(live);
+      }
     }
     block.appendChild(titleRow);
 

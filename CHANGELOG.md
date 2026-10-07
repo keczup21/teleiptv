@@ -25,6 +25,12 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.17] — 2026-10-07
+
+### Poprawiono
+- **Podpis LIVE / ODTWARZANE stoi w linii nazwy programu** — na liście programów (przycisk EPG w odtwarzaczu i archiwum) nazwa i podpis są teraz rozdzielone myślnikiem („Strażnik Teksasu - LIVE”), a nie zepchnięte do osobnej linii.
+- **Krótki program w programie TV pokazuje nazwę** — kafelek programu trwającego kwadrans był tak wąski, że plakietka LIVE / ODTWARZANE zabierała całe miejsce i nazwa zostawała wielokropkiem; teraz na wąskim kafelku plakietka znika, a tytuł dostaje mniejszy oddech i czcionkę.
+
 ## [2.1.16] — 2026-10-07
 
 ### Zmieniono

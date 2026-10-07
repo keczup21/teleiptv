@@ -411,6 +411,11 @@ aside {
    (patrz buildGuideProgram) — na siatce od razu widać, co leci z nagrania */
 .guide-program.playing { border-color: var(--accent); }
 .guide-program.playing time { color: var(--accent); }
+/* Krótki program na osi: kafelek jest za wąski na pełny tytuł, więc nazwa dostaje
+   więcej miejsca — mniejszy oddech i czcionka — a plakietka LIVE / ODTWARZANE
+   znika (patrz GUIDE_PILL_MIN_W i buildGuideProgram w www/app.js). */
+.guide-program.narrow { padding: 9px 8px; }
+.guide-program.narrow .guide-title-row span { font-size: 15px; }
 .program-playing {
   flex: none;
   padding: 1px 8px;
@@ -1141,8 +1146,11 @@ body.light .update-row button:hover { background: #e2e8f7; }
 body.uimode-tv .update-row button { font-size: 22px; padding: 18px 24px; }
 
 /* ---------- lista programów kanału (przycisk EPG w odtwarzaczu) ---------- */
-.program-title-row { display: flex; align-items: center; gap: 10px; margin-top: 5px; }
-.program .program-title-row .program-title { margin-top: 0; flex: 1; min-width: 0; }
+/* Nazwa programu i podpis LIVE / ODTWARZANE stoją w jednej linii, rozdzielone
+   myślnikiem („Strażnik Teksasu - LIVE”), a nie jedna pod drugą — tak czyta to
+   oko, gdy wpis listy jest wysoki (patrz programEntry w app.js). */
+.program-title-row { display: block; margin-top: 5px; }
+.program .program-title-row .program-title { display: inline; margin-top: 0; }
 .program .program-note { display: block; margin-top: 5px; color: var(--faint); font-size: 15px; }
 /* program, który leci teraz: obwódka akcentu i podpis LIVE przy tytule */
 .program.now { border-color: var(--accent); }
