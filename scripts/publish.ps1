@@ -1,4 +1,7 @@
-# TeleIPTV - szybka publikacja: stage + commit + push do repozytorium na GitHubie.
+# TeleIPTV dla Android TV / Google TV / Fire TV - szybka publikacja: stage +
+# commit + push do repozytorium teleiptv na GitHubie. Wydanie zawiera wylacznie
+# paczke .apk - paczka .ipk (LG webOS) powstaje i wychodzi z osobnego
+# repozytorium teleiptv-webos.
 #
 # Poświadczenia trzyma gh (raz zrobione `gh auth login` + `gh auth setup-git`),
 # więc push nie pyta o poświadczenia ani o zgodę.
@@ -115,17 +118,14 @@ try {
 
     if ($Release) {
         Write-Host ""
-        Write-Host "Buduje paczki do wydania ..."
-        Invoke-Exe npm run build:all
+        Write-Host "Buduje paczke do wydania ..."
+        Invoke-Exe npm run build:android
 
         $ver = (Get-Content (Join-Path $root "package.json") -Raw | ConvertFrom-Json).version
         $apk = Join-Path $root "dist\android\TeleIPTV-$ver.apk"
-        $ipk = Join-Path $root "dist\ipk\TeleIPTV-$ver.ipk"
-        foreach ($file in @($apk, $ipk)) {
-            if (-not (Test-Path $file)) {
-                throw ("Brak paczki: $file. Do wydania ida wylacznie gotowe pliki " +
-                       "z dist - najpierw uruchom npm run build:all.")
-            }
+        if (-not (Test-Path $apk)) {
+            throw ("Brak paczki: $apk. Do wydania ida wylacznie gotowe pliki " +
+                   "z dist - najpierw uruchom npm run build:android.")
         }
 
         if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -148,7 +148,7 @@ try {
         }
 
         Write-Host "Tworze wydanie $Tag ..."
-        $ghArgs = @("release", "create", $Tag, $apk, $ipk, "--title", "TeleIPTV $ver",
+        $ghArgs = @("release", "create", $Tag, $apk, "--title", "TeleIPTV $ver (Android TV / Fire TV)",
                     "--notes-file", $Notes)
         Invoke-Exe gh @ghArgs
         Write-Host "Wydanie gotowe: $Tag ($(Invoke-Git remote get-url origin))"

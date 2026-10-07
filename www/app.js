@@ -1,4 +1,9 @@
-/* TeleIPTV — wspólny kod dla webOS (.ipk) i Fire TV (.apk)
+/* TeleIPTV dla Android TV / Google TV / Fire TV (.apk) — to repozytorium buduje
+ * wyłącznie paczkę .apk (WebView + Capacitor). Kod jest bliźniaczo podobny do
+ * wersji na LG webOS (.ipk), ale od wersji 2.1.14 oba wydania rozwijają się
+ * osobno: zmiana tutaj nie trafia do repozytorium teleiptv-webos automatycznie
+ * i odwrotnie. Wersja na webOS:
+ * https://github.com/keczup21/teleiptv-webos
  *
  * ŹRÓDŁA (na profil):
  *   - Playlista M3U : adres URL lub plik lokalny
@@ -21,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.13";
+  var APP_VERSION = "2.1.14";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,

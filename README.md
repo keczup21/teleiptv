@@ -1,18 +1,17 @@
-# TeleIPTV
+# TeleIPTV — Android TV / Google TV / Fire TV
+
+To repozytorium buduje **wyłącznie paczkę `.apk`** — WebView z Capacitorem,
+składany Gradle'em. Wydanie na LG webOS (`.ipk`, pakowane `ares-cli`) ma własne
+repozytorium: [keczup21/teleiptv-webos](https://github.com/keczup21/teleiptv-webos).
+Do wersji 2.1.13 oba wydania powstawały z jednego kodu w jednym repozytorium;
+od 2.1.14 rozwijają się osobno, więc zmiany tutaj dotyczą tylko dekoderów
+z Androidem i Fire OS.
 
 > Do wersji 1.22.0 aplikacja nazywała się **OpenIPTV**. Tożsamość paczki
-> (`pl.openiptv.player`) się nie zmieniła, więc wersja 2.0.0 wchodzi jako
+> (`pl.openiptv.player`) się nie zmieniła, więc wersja 2.0.0 weszła jako
 > zwykła aktualizacja — profile, ustawienia i ulubione zostają na urządzeniu.
 
-Jeden kod web (`www/`), dwa wydania:
-
-| Platforma | Paczka | Technologia |
-|---|---|---|
-| LG webOS (Smart TV) | `.ipk` | aplikacja web pakowana przez `ares-cli` |
-| Android TV / Google TV / Fire TV | `.apk` | WebView + Capacitor, budowane Gradle'em |
-
-Warstwa interfejsu i cała logika są wspólne, różni się tylko opakowanie.
-Odtwarzacz M3U z EPG/XMLTV i obsługą paneli Xtream Codes:
+Odtwarzacz na dekodery (M3U, EPG/XMLTV, panele Xtream Codes):
 
 - źródła: link M3U, plik M3U albo login Xtream (serwer, użytkownik, hasło),
 - program TV (siatka wszystkich kanałów kategorii na osi czasu, z pionową linią
@@ -199,7 +198,10 @@ coś innego:
 |---|---|
 | przeglądarka, telefon | otwiera się systemowe okno wyboru plików |
 | Android TV / Google TV / Fire TV | wybór prowadzi plugin `OpenIptvFiles` (patrz niżej) |
-| webOS | systemowego okna nie ma, więc jest podpowiedź, czym zastąpić plik |
+
+(Wydanie na LG webOS radzi sobie inaczej: systemowego okna wyboru plików tam nie
+ma, więc aplikacja podpowiada, czym zastąpić plik — patrz repozytorium
+[teleiptv-webos](https://github.com/keczup21/teleiptv-webos).)
 
 Telewizory — typowy Fire TV — często nie mają żadnej aplikacji z systemowym oknem
 wyboru plików. Wtedy `<input type="file">` nie ma czego otworzyć i przycisk
@@ -226,18 +228,19 @@ o nazwie `.xml` też się rozpakuje.
 
 ## Pobieranie
 
-Gotowe paczki (`.apk` i `.ipk`) leżą w
-[wydaniach](https://github.com/keczup21/teleiptv/releases). Każde wydanie ma dwa
-pliki, a `<wersja>` w nazwie to numer z `package.json`:
+Gotowa paczka `.apk` leży w
+[wydaniach tego repozytorium](https://github.com/keczup21/teleiptv/releases),
+a `<wersja>` w nazwie pliku to numer z `package.json`:
 
 | Plik | System |
 |---|---|
 | `TeleIPTV-<wersja>.apk` | Android TV / Google TV / Fire TV |
-| `TeleIPTV-<wersja>.ipk` | LG webOS |
 
-Wydania są developerskie: `npm run build:android` składa paczkę `.apk` od razu po
-sklonowaniu repozytorium — nic nie trzeba przygotowywać poza nim — i dokładnie
-ten plik ląduje w wydaniu na GitHubie razem z `.ipk`.
+Paczka na LG webOS (`.ipk`) jest w
+[keczup21/teleiptv-webos](https://github.com/keczup21/teleiptv-webos/releases).
+
+Wydania są developerskie: `npm run build:android` składa paczkę od razu po
+sklonowaniu repozytorium — nic nie trzeba przygotowywać poza nim.
 
 Adres `.../releases/latest` zawsze prowadzi do najnowszego wydania, a numer
 wersji i pełna lista zmian są w `CHANGELOG.md`. Wpis w changelogu jest krótki
@@ -246,8 +249,8 @@ i skryptów wydania. Opis wydania (to, co widać na GitHubie jako „co nowego�
 wycina z `CHANGELOG.md` generator `scripts/release-notes.js` (`npm run notes`)
 — tylko sekcję wydawanej wersji, bez zmian z poprzednich wydań. Kolejne wydanie
 tworzy `scripts/publish.ps1` z przełącznikiem `-Release`: robi commit, buduje
-paczki (`npm run build:all`),
-sam generuje opis i tworzy wydanie tylko z tymi plikami — brak gotowej paczki
+paczkę (`npm run build:android`),
+sam generuje opis i tworzy wydanie tylko z tym plikiem — brak gotowej paczki
 przerywa publikację. Uwaga: przez npm argumenty podaje się po separatorze `--`,
 bo inaczej npm „zjada” `-Tag` / `-Release` jako swoje flagi (skrypt to wychwytuje
 i odmawia, gdy tag nie wygląda jak `vX.Y.Z`):
@@ -257,18 +260,17 @@ npm run publish -- -Message "wersja 1.19.0" -Tag v1.19.0 -Release
 # własny opis wydania zamiast z CHANGELOG.md: dodatkowo -Notes C:\sciezka\opis.md
 ```
 
-Ręcznie to samo robi `gh release create`, z jawnie wskazanymi paczkami i opisem:
+Ręcznie to samo robi `gh release create`, z jawnie wskazaną paczką i opisem:
 
 ```powershell
-gh release create vX.Y.Z dist\android\TeleIPTV-X.Y.Z.apk dist\ipk\TeleIPTV-X.Y.Z.ipk --title "TeleIPTV X.Y.Z" --notes-file dist\release-notes-X.Y.Z.md
+gh release create vX.Y.Z dist\android\TeleIPTV-X.Y.Z.apk --title "TeleIPTV X.Y.Z (Android TV / Fire TV)" --notes-file dist\release-notes-X.Y.Z.md
 ```
 
 ### Numeracja wersji
 
-Numer wersji jest zapisany w czterech miejscach — `www/app.js` (`APP_VERSION`),
-`www/appinfo.json`, `package.json` i `android/app/build.gradle` (`versionName`
-oraz `versionCode`) — a podbija je jedna komenda, żeby żadne miejsce nie zostało
-ze starą wersją:
+Numer wersji jest zapisany w trzech miejscach — `www/app.js` (`APP_VERSION`),
+`package.json` i `android/app/build.gradle` (`versionName` oraz `versionCode`) —
+a podbija je jedna komenda, żeby żadne miejsce nie zostało ze starą wersją:
 
 ```powershell
 npm run bump -- 1.20.0   # gruba zmiana: nowa funkcja, przebudowa
@@ -284,18 +286,16 @@ dostać wpis w `CHANGELOG.md`.
 ## Struktura
 
 ```
-TeleIPTV/
-├─ www/                     wspólny kod aplikacji (edytuj tylko tutaj)
+TeleIPTV (Android)/
+├─ www/                     kod aplikacji (edytuj tylko tutaj)
 │  ├─ index.html app.js styles.css ui-scale.js
 │  ├─ epg-worker.js         parser XMLTV poza wątkiem UI (fallback: app.js)
-│  ├─ appinfo.json          manifest webOS
 │  ├─ icon.png icon.svg largeicon.png
 │  └─ lib/                  hls.min.js, mpegts.min.js, pako.min.js (ładowane leniwie)
-├─ webos-service/           natywny serwis webOS (pobieranie bez CORS)
 ├─ android/                 projekt Android wygenerowany przez Capacitor
-│  └─ app/                  MainActivity, UpdatePlugin, FilePlugin, AndroidManifest, ikony, splash
+│  └─ app/                  MainActivity, UpdatePlugin, FilePlugin, VlcEngine, AndroidManifest, ikony, splash
+├─ docs/                    strona projektu (GitHub Pages)
 ├─ scripts/
-│  ├─ build-webos.ps1       www/ + webos-service/ → .ipk
 │  ├─ build-android.ps1     www/ → .apk (Capacitor + Gradle)
 │  ├─ make-icons.ps1        znak TeleIPTV: ikony PNG, splash, icon.svg, og.png
 │  ├─ test-*.js             testy bez telewizora (npm test)
@@ -308,29 +308,13 @@ TeleIPTV/
 ## Wymagania
 
 - Node.js 18+ i npm.
-- webOS: `npm install -g @webos-tools/cli` (daje `ares-package` i `ares-install`).
-- Android (.apk): JDK 17 oraz Android SDK z platform-tools, android-34 i build-tools 34.0.0.
+- JDK 17 oraz Android SDK z platform-tools, android-34 i build-tools 34.0.0.
   `scripts/build-android.ps1` czyta `JAVA_HOME` i `ANDROID_HOME`, a gdy ich nie ma,
   szuka JDK 17 w `C:\Program Files\Eclipse Adoptium` i SDK w `%USERPROFILE%\Android\Sdk`.
 
-## Build — webOS (.ipk)
-
-```powershell
-npm install
-npm run build:webos
-# wynik: dist\ipk\TeleIPTV-<wersja>.ipk
-```
-
-`ares-package` nazywa wynik `pl.openiptv.player_<wersja>_all.ipk` (`all`, bo to
-czysta aplikacja web) — skrypt zmienia nazwę na taką samą jak paczka Android.
-Urządzenie czyta `appinfo.json` z wnętrza paczki, więc nazwa pliku nie ma znaczenia.
-
-Instalacja na TV (tryb deweloperski + `ares-setup-device`):
-
-```powershell
-ares-install -d <device> dist\ipk\TeleIPTV-<wersja>.ipk
-ares-launch  -d <device> pl.openiptv.player
-```
+Paczka na LG webOS potrzebuje `@webos-tools/cli` (daje `ares-package`
+i `ares-install`) — to opisuje
+[README repozytorium teleiptv-webos](https://github.com/keczup21/teleiptv-webos).
 
 ## Build — Android (.apk)
 
@@ -341,9 +325,8 @@ npm run build:android
 ```
 
 To wydanie developerskie: cała konfiguracja budowania leży w repozytorium, więc
-paczka powstaje bez żadnych dodatkowych plików na dysku. Ten sam plik, który
-zapisze się w `dist\android`, idzie na GitHuba (`npm run build:all` dorzuca
-jeszcze `.ipk`), a instalacja to jedno `adb install -r`.
+paczka powstaje bez żadnych dodatkowych plików na dysku. Dokładnie ten plik idzie
+na GitHuba, a instalacja to jedno `adb install -r`.
 
 Instalacja na Android TV / Fire TV (ADB Debugging włączone, ta sama sieć):
 
@@ -352,7 +335,7 @@ adb connect <ip>:5555
 adb install -r dist\android\TeleIPTV-<wersja>.apk
 ```
 
-Oba skrypty mają parametr `-OutDir`, którym można wskazać inny folder docelowy, np.
+Skrypt ma parametr `-OutDir`, którym można wskazać inny folder docelowy, np.
 `npm run build:android -- -OutDir D:\builds`.
 
 ### Konfiguracja Android (w `android/app/src/main/AndroidManifest.xml`)
@@ -404,13 +387,12 @@ Strona jest przygotowana pod wyszukiwarki:
   odbiorcy), a `og.png`/`icon.png` to PNG, bo serwisy społecznościowe nie
   czytają SVG.
 
-Repozytorium nazywa się `teleiptv`, a strona projektu stoi na GitHub Pages pod
+To repozytorium nazywa się `teleiptv` i tu stoi strona projektu na GitHub Pages:
 `https://keczup21.github.io/teleiptv/`. Ten adres jest wpisany w `docs/index.html`
 (`canonical`, `og:url`, `og:image`, `twitter:image` i dane `application/ld+json`),
-w `docs/robots.txt`, w `docs/sitemap.xml` oraz w `UPDATE_REPO` w `www/app.js`
-(sprawdzanie aktualizacji na webOS chodzi przez natywny serwis, który nie podąża
-za przekierowaniami). Po kolejnej zmianie nazwy repozytorium trzeba go podmienić
-w tych wszystkich miejscach.
+w `docs/robots.txt` oraz w `docs/sitemap.xml`. Nazwa repozytorium jest też
+w `UPDATE_REPO` w `www/app.js` i w `package.json` — po jej zmianie trzeba ją
+podmienić w tych dwóch miejscach.
 
 Żeby strona trafiła do Google, zostaje dodanie jej w
 [Google Search Console](https://search.google.com/search-console) i zgłoszenie
@@ -424,7 +406,7 @@ Bez telewizora i bez emulatora — `npm test` uruchamia wszystkie siedem:
 
 ```powershell
 npm run test:seek     # przewijanie archiwum, pauza/wznowienie, 🔇 i ▲▼ kanał (www/app.js)
-npm run test:update   # porównanie wersji i wybór paczki .apk / .ipk
+npm run test:update   # porównanie wersji i wybór paczki .apk
 npm run test:ui       # skalowanie interfejsu (www/ui-scale.js)
 npm run test:pick     # wybór pliku M3U/EPG: przyciski, plugin natywny, błędy odczytu
 npm run test:nav      # menu główne i ustawienia: zakładki, ikony SVG, pasek odtwarzacza, klawisze multimedialne
@@ -457,8 +439,9 @@ internetu.
   aktualizacja nie wymaga ADB ani komputera. Potrzebna jest zgoda „Instaluj
   nieznane aplikacje” dla TeleIPTV — gdy jej nie ma, aplikacja sama otwiera
   ekran, na którym się ją włącza.
-- **LG webOS** — system nie instaluje `.ipk` sam, więc aplikacja pokazuje
-  numer wersji, nazwę paczki i adres wydania; paczkę wgrywa się z komputera
-  (`ares-install`, sekcja „Build — webOS”).
+- **LG webOS** — to wydanie jest w repozytorium
+  [keczup21/teleiptv-webos](https://github.com/keczup21/teleiptv-webos): tam
+  aplikacja pokazuje numer wersji, nazwę paczki i adres wydania (system nie
+  instaluje `.ipk` sam), a paczkę wgrywa się z komputera przez `ares-install`.
 - **przeglądarka** (`npm run serve`) — zostaje sam komunikat o nowszej wersji.
 

@@ -16,7 +16,9 @@ const ROOT = path.join(__dirname, "..");
 const RES = path.join(ROOT, "android", "app", "src", "main", "res");
 const GEN = path.join(ROOT, "scripts", "make-icons.ps1");
 
-/* Tlo splashu = --bg z www/styles.css i bgColor z www/appinfo.json */
+/* Tlo splashu = --bg z www/styles.css i $script:SplashBg z scripts/make-icons.ps1
+   (manifest appinfo.json należy do wydania webOS — patrz repozytorium
+   teleiptv-webos) */
 const BG = "#0a0c11";
 /* Udzial krotszego boku, jaki zajmuje znak (patrz $script:SplashLogo) */
 const LOGO = 0.26;
@@ -134,9 +136,10 @@ function logoBox(img, bg) {
 
 /* --- kolor tla zgadza sie z reszta aplikacji ----------------------------- */
 const css = fs.readFileSync(path.join(ROOT, "www", "styles.css"), "utf8");
-const info = fs.readFileSync(path.join(ROOT, "www", "appinfo.json"), "utf8");
+const genForBg = fs.readFileSync(GEN, "utf8").replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ");
 check("kolor tla splashu to --bg z www/styles.css", css.indexOf("--bg: " + BG) > 0);
-check("kolor tla splashu to bgColor z www/appinfo.json", info.indexOf("\"bgColor\": \"" + BG + "\"") > 0);
+check("kolor tla splashu to $script:SplashBg z scripts/make-icons.ps1",
+  genForBg.indexOf("$script:SplashBg = '" + BG + "'") > 0);
 
 /* --- sam motyw: splash musi byc tym plikiem, ktory rysuje Android -------- */
 const styles = fs.readFileSync(path.join(RES, "values", "styles.xml"), "utf8").replace(/\r\n/g, "\n");

@@ -26,7 +26,7 @@
 <meta property="og:image:alt" content="TeleIPTV — telewizor z napisem IPTV na ekranie">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="TeleIPTV — odtwarzacz IPTV na LG webOS, Android TV i Fire TV">
-<meta name="twitter:description" content="M3U, Xtream Codes, EPG/XMLTV, catch-up i pilot — jeden kod, dwa wydania: .ipk na LG webOS i .apk na Android TV / Fire TV.">
+<meta name="twitter:description" content="M3U, Xtream Codes, EPG/XMLTV, catch-up i pilot — wydanie .apk na Android TV i Fire TV oraz .ipk na LG webOS, każde w swoim repozytorium.">
 <meta name="twitter:image" content="https://keczup21.github.io/teleiptv/assets/og.png">
 <!-- Dane dla wyszukiwarek: co to za aplikacja i odpowiedzi z sekcji „Pytania” -->
 <script type="application/ld+json">
@@ -41,7 +41,7 @@
       "operatingSystem": "LG webOS 6+, Android TV, Google TV, Amazon Fire TV",
       "softwareVersion": "2.0.0",
       "inLanguage": "pl",
-      "description": "Darmowy odtwarzacz IPTV na telewizor: źródło M3U, plik M3U albo panel Xtream Codes, program TV z XMLTV, archiwum i catch-up, ulubione, obsługa pilota. Jeden kod, dwa wydania: .ipk na LG webOS i .apk na Android TV / Fire TV.",
+      "description": "Darmowy odtwarzacz IPTV na telewizor: źródło M3U, plik M3U albo panel Xtream Codes, program TV z XMLTV, archiwum i catch-up, ulubione, obsługa pilota. Dwa wydania: .apk na Android TV, Google TV i Fire TV (to repozytorium) oraz .ipk na LG webOS (repozytorium teleiptv-webos).",
       "url": "https://keczup21.github.io/teleiptv/",
       "downloadUrl": "https://github.com/keczup21/teleiptv/releases/latest",
       "installUrl": "https://keczup21.github.io/teleiptv/#instalacja",
@@ -154,8 +154,9 @@
   <div class="wrap">
     <h1>TeleIPTV — IPTV na dużym ekranie.</h1>
     <p>TeleIPTV to odtwarzacz M3U z programem TV, archiwum i łącznością z panelem
-       Xtream Codes. Jedna warstwa web (<code>www/</code>), dwa opakowania:
-       <b>.ipk</b> dla LG webOS i <b>.apk</b> dla Android TV / Google TV / Fire TV.</p>
+       Xtream Codes. Dwa wydania, każde w swoim repozytorium: <b>.apk</b> dla
+       Android TV, Google TV i Fire TV (to repozytorium) oraz <b>.ipk</b> dla LG
+       webOS (<a href="https://github.com/keczup21/teleiptv-webos">teleiptv-webos</a>).</p>
     <p>Sterowanie pilotem, siatka EPG liczona poza wątkiem interfejsu, profile źródeł
        i dwujęzyczny interfejs. Bez konta i bez chmury — playlista zostaje na urządzeniu.</p>
     <ul class="badges">
@@ -247,25 +248,27 @@
 <section class="sec" id="architektura">
   <div class="wrap">
     <h2>Jak to działa</h2>
-    <p class="lead">Cała logika i wygląd siedzą w <code>www/</code>. Zmieniasz raz,
-       przebudowujesz paczkę dla jednego systemu albo dla obu.</p>
+    <p class="lead">Każde wydanie ma w swoim repozytorium własną kopię kodu
+       w <code>www/</code>: to repozytorium buduje paczkę na Android TV, Google TV
+       i Fire TV, a <a href="https://github.com/keczup21/teleiptv-webos">teleiptv-webos</a>
+       — na LG webOS. Interfejs i logika są bliźniaczo podobne, ale od wersji 2.1.14
+       zmienia się je osobno.</p>
     <div class="cols" style="margin-top:22px">
-      <div class="card"><h3>www/ — wspólny kod</h3>
+      <div class="card"><h3>www/ — kod aplikacji (Android)</h3>
         <p><code>index.html</code>, <code>app.js</code>, <code>styles.css</code>,
            <code>ui-scale.js</code>, <code>epg-worker.js</code> oraz leniwie
-           dociągane <code>lib/</code> (hls.js, mpegts.js, pako). Te same pliki
-           obsługują oba systemy.</p></div>
-      <div class="card"><h3>webos-service/ — natywny fetch</h3>
-        <p>Niewielki serwis Luna (<code>pl.openiptv.player.service.fetch</code>)
-           pobiera playlistę i EPG z pominięciem limitów CORS przeglądarki TV.</p></div>
+           dociągane <code>lib/</code> (hls.js, mpegts.js, pako).</p></div>
+      <div class="card"><h3>teleiptv-webos — wydanie na webOS</h3>
+        <p>Osobne repozytorium z tym samym interfejsem i natywnym serwisem Luna
+           (<code>pl.openiptv.player.service.fetch</code>), który pobiera playlistę
+           i EPG z pominięciem limitów CORS przeglądarki TV.</p></div>
       <div class="card"><h3>android/ — obudowa Capacitor</h3>
         <p>WebView z manifestem pod telewizory: tryb leanback, brak wymogu
            ekranu dotykowego, orientacja pozioma i dopuszczony strumień http.</p></div>
       <div class="card"><h3>scripts/ — budowanie</h3>
-        <p><code>build-webos.ps1</code> → <code>.ipk</code>,
-           <code>build-android.ps1</code> → <code>.apk</code>,
-           <code>make-icons.ps1</code> → ikony, <code>publish.ps1</code> → commit
-           i push na GitHuba.</p></div>
+        <p><code>build-android.ps1</code> → <code>.apk</code>,
+           <code>make-icons.ps1</code> → ikony i splash, <code>publish.ps1</code> →
+           commit i push na GitHuba.</p></div>
     </div>
   </div>
 </section>
@@ -273,26 +276,18 @@
 <section class="sec" id="instalacja">
   <div class="wrap">
     <h2>Instalacja</h2>
-    <p class="lead">Gotowe paczki są w wydaniach na GitHubie — najnowsze wydanie ma
-       zawsze dwa pliki: <code>TeleIPTV-&lt;wersja&gt;.apk</code> (Android TV i Fire TV)
-       oraz <code>TeleIPTV-&lt;wersja&gt;.ipk</code> (LG webOS).</p>
+    <p class="lead">Każde wydanie jest w swoim repozytorium: tutaj leży
+       <code>TeleIPTV-&lt;wersja&gt;.apk</code> (Android TV, Google TV i Fire TV),
+       a <code>TeleIPTV-&lt;wersja&gt;.ipk</code> (LG webOS) jest w repozytorium
+       <a href="https://github.com/keczup21/teleiptv-webos">teleiptv-webos</a>.</p>
     <div class="cta" style="margin:18px 0 0">
-      <a class="btn btn-primary" href="https://github.com/keczup21/teleiptv/releases/latest">Pobierz najnowsze wydanie</a>
-      <a class="btn btn-ghost" href="https://github.com/keczup21/teleiptv/releases">Wszystkie wydania</a>
+      <a class="btn btn-primary" href="https://github.com/keczup21/teleiptv/releases/latest">Pobierz wydanie na Android TV / Fire TV</a>
+      <a class="btn btn-ghost" href="https://github.com/keczup21/teleiptv-webos/releases/latest">Pobierz wydanie na LG webOS</a>
+      <a class="btn btn-ghost" href="https://github.com/keczup21/teleiptv/releases">Wszystkie wydania Androida</a>
     </div>
-    <p class="lead" style="margin-top:22px">Albo ze źródeł:</p>
+    <p class="lead" style="margin-top:22px">Albo ze źródeł — tutaj powstaje paczka
+       Androida, a paczkę na webOS buduje repozytorium teleiptv-webos:</p>
     <div class="cols" style="margin-top:22px">
-      <div class="card">
-        <h3>LG webOS</h3>
-        <pre><code>npm install
-npm run build:webos
-
-ares-setup-device             # raz, tryb deweloperski na TV
-ares-install -d tv dist/ipk/TeleIPTV-&lt;wersja&gt;.ipk
-ares-launch  -d tv pl.openiptv.player</code></pre>
-        <p>Potrzebny tryb deweloperski na telewizorze i pakiet
-           <code>@webos-tools/cli</code>.</p>
-      </div>
       <div class="card">
         <h3>Android TV / Fire TV</h3>
         <pre><code>npm install
@@ -301,13 +296,20 @@ npm run build:android
 adb connect &lt;ip-tv&gt;:5555
 adb install -r dist/android/TeleIPTV-&lt;wersja&gt;.apk</code></pre>
         <p>Na urządzeniu włącz tryb programisty
-           (<code>Ustawienia → Informacje → 7× klik</code>) i debugowanie ADB.</p>
+           (<code>Ustawienia → Informacje → 7× klik</code>) i debugowanie ADB.
+           Skrypt przyjmuje <code>-OutDir</code>, np.
+           <code>npm run build:android -- -OutDir D:\builds</code>.</p>
       </div>
       <div class="card">
-        <h3>Obie paczki naraz</h3>
-        <pre><code>npm run build:all    # .ipk + .apk</code></pre>
-        <p>Skrypty przyjmują <code>-OutDir</code>, np.
-           <code>npm run build:android -- -OutDir D:\builds</code>.</p>
+        <h3>LG webOS — z repozytorium teleiptv-webos</h3>
+        <pre><code>npm install
+npm run build:webos
+
+ares-setup-device             # raz, tryb deweloperski na TV
+ares-install -d tv dist/ipk/TeleIPTV-&lt;wersja&gt;.ipk
+ares-launch  -d tv pl.openiptv.player</code></pre>
+        <p>Potrzebny tryb deweloperski na telewizorze i pakiet
+           <code>@webos-tools/cli</code>.</p>
       </div>
     </div>
     <p class="note" style="margin-top:20px">Zmiana nazwy na TeleIPTV nie zmienia

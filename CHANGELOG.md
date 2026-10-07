@@ -6,9 +6,14 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/), wersje wg [Sem
 **Jak numerujemy wersje:** gruba zmiana (nowa funkcja, przebudowa) podbija
 środkową liczbę — `1.19.0 → 1.20.0`, poprawka albo drobiazg ostatnią —
 `1.19.0 → 1.19.1`, a zmiana nazwy albo tożsamości aplikacji pierwszą —
-`1.22.0 → 2.0.0`. Wszystkie cztery miejsca z numerem (`www/app.js`,
-`www/appinfo.json`, `package.json`, `android/app/build.gradle`) podbija jedna
-komenda: `npm run bump -- X.Y.Z`.
+`1.22.0 → 2.0.0`. Wszystkie trzy miejsca z numerem (`www/app.js`,
+`package.json`, `android/app/build.gradle`) podbija jedna komenda:
+`npm run bump -- X.Y.Z`.
+
+Od wersji 2.1.14 wpisy dotyczą wyłącznie wydania na **Android TV, Google TV
+i Fire TV** — wersja na LG webOS ma własne repozytorium
+(`keczup21/teleiptv-webos`) i własny changelog. Wpisy z wcześniejszych wersji
+opisują jeszcze oba wydania razem.
 
 **Jak piszemy wpisy:** wpis jest krótki i mówi tylko o tym, co zmieniło się
 w aplikacji, czyli o funkcjach i poprawkach widocznych na ekranie. Każdy punkt
@@ -19,6 +24,11 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+
+## [2.1.14] — 2026-10-07
+
+### Zmieniono
+- **Repozytorium zostało dla samego Androida** — od 2.1.14 mieści się tu wyłącznie wydanie na Android TV, Google TV i Fire TV (`.apk`), a aplikacja na LG webOS (`.ipk`) ma własne repozytorium `keczup21/teleiptv-webos`.
 
 ## [2.1.13] — 2026-10-07
 

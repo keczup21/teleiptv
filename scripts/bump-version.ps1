@@ -10,8 +10,8 @@
 #   npm run bump -- 1.20.0                   # gruba zmiana
 #   npm run bump -- 1.19.1                   # poprawka albo drobiazg
 #
-# Podbija cztery miejsca, w ktorych numer wersji jest zapisany w repozytorium:
-#   www/app.js (APP_VERSION), www/appinfo.json, package.json
+# Podbija trzy miejsca, w ktorych numer wersji jest zapisany w repozytorium:
+#   www/app.js (APP_VERSION), package.json
 #   oraz android/app/build.gradle (versionName + versionCode).
 # versionCode rosnie o 1, chyba ze podasz -VersionCode wprost.
 # Skopiowane assety Androida (android/app/src/main/assets) nie sa w repozytorium -
@@ -88,7 +88,6 @@ $oldCode = [int]$codeMatch.Groups[1].Value
 if ($VersionCode -le 0) { $VersionCode = $oldCode + 1 }
 
 Set-Bumped "www\app.js"               '(var APP_VERSION\s*=\s*")[^"]+(")'   ('${1}' + $Version + '${2}')
-Set-Bumped "www\appinfo.json"         '("version"\s*:\s*")[^"]+(")'        ('${1}' + $Version + '${2}')
 Set-Bumped "package.json"             '("version"\s*:\s*")[^"]+(")'        ('${1}' + $Version + '${2}')
 Set-Bumped "android\app\build.gradle" '(versionName\s*")[^"]+(")'          ('${1}' + $Version + '${2}')
 Set-Bumped "android\app\build.gradle" '(versionCode\s+)\d+'                ('${1}' + $VersionCode)
@@ -98,12 +97,11 @@ Write-Host "Wersja $current -> ${Version}   (versionCode $oldCode -> $VersionCod
 Write-Host ""
 Write-Host "Podbite miejsca:"
 Write-Host ("  www/app.js                  " + [regex]::Match((Get-Text "www\app.js"), 'var APP_VERSION\s*=\s*"[^"]+"').Value)
-Write-Host ("  www/appinfo.json            " + [regex]::Match((Get-Text "www\appinfo.json"), '"version"\s*:\s*"[^"]+"').Value)
 Write-Host ("  package.json                " + [regex]::Match((Get-Text "package.json"), '"version"\s*:\s*"[^"]+"').Value)
 Write-Host ("  android/app/build.gradle    " + [regex]::Match((Get-Text "android\app\build.gradle"), 'versionCode\s+\d+').Value +
              ", " + [regex]::Match((Get-Text "android\app\build.gradle"), 'versionName\s*"[^"]+"').Value)
 Write-Host ""
 Write-Host "Dalej:"
 Write-Host "  1. wpis dla $Version w CHANGELOG.md"
-Write-Host "  2. npm run build:all"
+Write-Host "  2. npm run build:android"
 Write-Host "  3. npm run publish --message=`"wersja $Version`" -Tag v$Version -Release"
