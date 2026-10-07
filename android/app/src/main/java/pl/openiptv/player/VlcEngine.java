@@ -82,6 +82,8 @@ class VlcEngine {
 
     private MediaPlayer player;
     private VLCVideoLayout layout;
+    /* czy trwa tryb dzielony obraz + EPG (patrz setSplit) */
+    private boolean split = false;
     private Runnable statsTick;
 
     /* Stan ostatniej próby: most czyta go bez czekania, a panel diagnostyki
@@ -341,6 +343,28 @@ class VlcEngine {
            zakłada na czas odtwarzania klasę „exo-player”). */
         root.addView(layout, 0);
         webView.setBackgroundColor(Color.TRANSPARENT);
+    }
+
+    /* Zwężenie warstwy obrazu do lewej kolumny (62%) na czas trybu dzielonego
+       obraz + EPG — to samo, co robi applyVideoSplit w MainActivity dla warstwy
+       odtwarzacza systemowego (patrz showPlayerEpg w app.js). */
+    void setSplit(boolean on) {
+        split = on;
+        applySplit();
+    }
+
+    private void applySplit() {
+        if (layout == null) return;
+        try {
+            ViewGroup.LayoutParams current = layout.getLayoutParams();
+            if (!(current instanceof FrameLayout.LayoutParams)) return;
+            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) current;
+            int screenWidth = activity.getResources().getDisplayMetrics().widthPixels;
+            params.width = split ? Math.round(screenWidth * 0.62f) : ViewGroup.LayoutParams.MATCH_PARENT;
+            params.gravity = split ? (Gravity.START | Gravity.CENTER_VERTICAL) : Gravity.CENTER;
+            layout.setLayoutParams(params);
+        } catch (Exception ignored) {
+        }
     }
 
     /* Zdarzenia VLC. Trzymają ten sam stan, co zdarzenia <video> na innych

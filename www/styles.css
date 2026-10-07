@@ -500,6 +500,21 @@ body.video-layer-fix .player-screen video {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
 }
+
+/* ---------- obraz + EPG obok siebie (tryb dzielony) ----------
+   Pasek „EPG” w odtwarzaczu nie zasłania już transmisji: obraz zwęża się do
+   lewej kolumny, a po prawej stoi lista programów oglądanego kanału. Klasę na
+   <body> zakłada showPlayerEpg w app.js, a warstwę obrazu na Androidzie zwęża
+   dodatkowo most setVideoSplit (obraz rysuje się pod stroną — patrz
+   MainActivity i VlcEngine w projekcie Androida). */
+body.player-epg #playerScreen { right: auto; width: 62%; }
+body.player-epg #archiveScreen { left: 62%; background: var(--bg); }
+/* wąski albo pionowy ekran (telefon): nie dzielimy na siłę — lista programów
+   zajmuje całość, tak jak było dotąd */
+@media (max-width: 900px) {
+  body.player-epg #playerScreen { display: none; }
+  body.player-epg #archiveScreen { left: 0; }
+}
 /* ---------- odtwarzacz systemowy (Android: obraz POD stroną) ----------
    Kanał na żywo oddajemy odtwarzaczowi odbiornika (patrz startExoSource w app.js),
    a on rysuje klatki na własnej warstwie POD stroną — tak gra każda inna aplikacja

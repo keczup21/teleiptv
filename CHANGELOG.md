@@ -25,6 +25,14 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.18] — 2026-10-07
+
+### Dodano
+- **„EPG” w odtwarzaczu dzieli ekran na obraz i program kanału** — przycisk EPG pokazuje teraz listę programów obok lecącej transmisji (obraz po lewej, program po prawej), a nie na całym ekranie; Wstecz zamyka samą listę i wraca do obrazu.
+
+### Poprawiono
+- **Gwiazdka ulubionych działa pilotem** — na kafelku kanału krótkie OK na gwieździe przełącza teraz ulubione, a nie włącza kanał (wcześniej OK w tym miejscu zawsze odtwarzało kanał, więc gwiazdki nie dało się użyć).
+
 ## [2.1.17] — 2026-10-07
 
 ### Poprawiono

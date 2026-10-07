@@ -147,6 +147,21 @@ public class MainActivity extends BridgeActivity {
                     playerMode = on;
                 }
 
+                /* Tryb dzielony obraz + EPG: warstwa obrazu zwęża się do lewej
+                   kolumny, żeby po prawej zmieściła się lista programów (patrz
+                   showPlayerEpg w app.js). Obraz rysuje warstwa pod stroną, więc
+                   sam CSS jej nie ruszy — stąd ten most. Obsługuje obie drogi
+                   sprzętowe: odtwarzacz systemowy (videoView) i VLC (VlcEngine). */
+                @JavascriptInterface
+                public void setVideoSplit(final boolean on) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            applyVideoSplit(on);
+                        }
+                    });
+                }
+
                 /* ---- odtwarzacz systemowy: app.js woła to samo, co robi każda
                    aplikacja IPTV na Androidzie — oddaje adres kanału sprzętowemu
                    dekoderowi (patrz ODTWARZACZ NATYWNY niżej). Metody mostu
@@ -612,6 +627,28 @@ public class MainActivity extends BridgeActivity {
         try {
             if (videoView != null) videoView.setVisibility(View.GONE);
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /* Zwężenie warstwy obrazu do lewej kolumny (62%) na czas trybu dzielonego
+       obraz + EPG; po wyjściu wraca na cały ekran. Dotyczy obu dróg sprzętowych:
+       odtwarzacza systemowego (videoView) i VLC (vlcEngine.setSplit). Drogi
+       strony (<video>) zwęża CSS w app.js. */
+    private void applyVideoSplit(boolean on) {
+        try {
+            if (vlcEngine != null) vlcEngine.setSplit(on);
+        } catch (Exception ignored) {
+        }
+        try {
+            if (videoView == null) return;
+            ViewGroup.LayoutParams current = videoView.getLayoutParams();
+            if (!(current instanceof FrameLayout.LayoutParams)) return;
+            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) current;
+            int screenWidth = getResources().getDisplayMetrics().widthPixels;
+            params.width = on ? Math.round(screenWidth * 0.62f) : ViewGroup.LayoutParams.MATCH_PARENT;
+            params.gravity = on ? (Gravity.START | Gravity.CENTER_VERTICAL) : Gravity.CENTER;
+            videoView.setLayoutParams(params);
         } catch (Exception ignored) {
         }
     }
