@@ -841,6 +841,28 @@ check("lista programow z odtwarzacza staje na programie, ktory leci teraz",
   src.indexOf("if (fromPlayer && live) {") > 0);
 check("wylaczony wpis nie przejmuje fokusu przy wejsciu na ekran",
   src.indexOf("if (all[i].disabled) continue;") > 0);
+/* Wpis listy czyta sie teraz w trzech liniach: dzien z rokiem, godzina od–do
+   i dopiero pod nimi nazwa z podpisem LIVE / ODTWARZANE. Wczesniej data i godzina
+   staly sklejone („07.10 11:00–12:00”) i wygladaly jak jedna liczba. */
+check("wpis listy programow: data z rokiem nad godzina od-do",
+  src.indexOf("function formatDay(ms)") > 0 &&
+  src.indexOf("function formatClock(start, end)") > 0 &&
+  src.indexOf('day.className = "program-date";') > 0 &&
+  src.indexOf("time.appendChild(document.createTextNode(formatClock(program.start, program.end)));") > 0 &&
+  css.indexOf(".program-date { display: block;") > 0);
+const padAt = src.indexOf("function pad2(n)");
+const dayAt = src.indexOf("function formatDay(ms)");
+const clockAt = src.indexOf("function formatClock(start, end)");
+if (padAt < 0 || dayAt < 0 || clockAt < 0) throw new Error("Nie znalazlem formatDay/formatClock w app.js");
+const dateBox = run(
+  src.slice(padAt, src.indexOf("\n  }", padAt) + 4) +
+  src.slice(dayAt, src.indexOf("\n  }", clockAt) + 4),
+  {});
+const dayMoment = new Date(2026, 9, 7, 11, 0).getTime();
+const dayMomentEnd = new Date(2026, 9, 7, 12, 0).getTime();
+check("data to pelny dzien z rokiem, a godzina sama (07.10.2026 / 11:00–12:00)",
+  dateBox.formatDay(dayMoment) === "07.10.2026" &&
+  dateBox.formatClock(dayMoment, dayMomentEnd) === "11:00–12:00");
 
 /* --- 19. play/pauza z pilota (klawisze multimedialne) --------------------
    Przycisk ⏵‖ na pilocie nie robił nic: dekodery wysyłają różne kody
@@ -1076,8 +1098,49 @@ check("◀ ▶ chodza po programach tego samego kanalu",
   src.indexOf("function guideStepProgram(dir)") > 0 &&
   src.indexOf("guideStepProgram(key === 37 || key === 412 ? -1 : 1);") > 0 &&
   src.indexOf("guidePan(key === 37 || key === 412 ? -1 : 1);") < 0 &&
-  src.indexOf('var blocks = row.querySelectorAll(".guide-program");') > 0 &&
+  src.indexOf("var blocks = guideRowBlocks(row);") > 0 &&
   src.indexOf("focusKeepScroll(next);\n      revealGuideBlock(next);") > 0);
+/* Programy trzymamy posortowane od najnowszego (parseXmltv), wiec kafelek obok
+   w DOM lezy na osi po przeciwnej stronie, niz wskazuje strzalka: ◀ szlo w prawo,
+   a ▶ w lewo i dopiero na skraju okna podswietlenie „odnajdywalo sie” po drugiej
+   stronie. Sasiada bierzemy po czasie (data-start), a nie po numerze w DOM. */
+check("◀ ▶ ida po osi czasu, a nie po kolejnosci kafelkow w DOM",
+  src.indexOf("function guideRowBlocks(row)") > 0 &&
+  /blocks\.sort\(function \(a, b\) \{\s*return \(parseInt\(a\.getAttribute\("data-start"\), 10\) \|\| 0\) -/.test(src));
+/* Nazwa podswietlonego programu jest zawsze widoczna: waski kafelek (krotki
+   program) ucina ja wielokropkiem, a wtedy czyta sie ja z podpisu nad siatka
+   (guideFocusNote), ktory pokazuje tez godziny tego programu. */
+check("nazwa podswietlonego programu jest nad siatka (takze przy waskim kafelku)",
+  html.indexOf('<span id="guideFocusName" class="guide-focus-name"></span>') > 0 &&
+  src.indexOf("function guideFocusNote(block)") > 0 &&
+  src.indexOf("guideFocusNote(block);") > 0 &&
+  src.indexOf("guideFocusNote(null);") > 0 &&
+  src.indexOf('t("guide_focus_name", {') > 0 &&
+  css.indexOf(".guide-focus-name { color: var(--accent);") > 0);
+/* Os czasu jest oknem, a nie przewijanym widokiem: przewinieta w poziomie siatka
+   rozjezdzala widoczny zakres z oknem czasu i podswietlony program uciekal za
+   krawedz (bylo go widac tyle, co nic). */
+check("podswietlony kafelek nie ucieka w poziomie",
+  src.indexOf("if (grid.scrollLeft) grid.scrollLeft = 0;") > 0 &&
+  src.indexOf("if (container.scrollLeft) container.scrollLeft = 0;") > 0);
+/* Szerokosc godziny musi zmiescic cala os w widoku: na ekranie, ktory nie ma
+   trzech godzin po GUIDE_HOUR_MIN_W, stara wersja podnosila szerokosc do minimum
+   i os wystawala za prawa krawedz — program na koncu zakresu znikal z ekranu. */
+const hourWidthAt = src.indexOf("function guideHourWidth(room, hours)");
+if (hourWidthAt < 0) throw new Error("Nie znalazlem guideHourWidth w app.js");
+const hourWidthBox = run(src.slice(hourWidthAt, src.indexOf("\n  }", hourWidthAt) + 4),
+  { GUIDE_HOUR_FIT_W: 120 });
+check("wasciutki ekran: os czasu nie wystaje za prawa krawedz",
+  hourWidthBox.guideHourWidth(652, 3) === Math.floor(652 / 3) &&
+  3 * hourWidthBox.guideHourWidth(652, 3) <= 652);
+check("telewizor 1080p: godzina dzieli miejsce tak jak dotad (300+ px)",
+  hourWidthBox.guideHourWidth(1564, 5) === Math.floor(1564 / 5) &&
+  5 * hourWidthBox.guideHourWidth(1564, 5) <= 1564);
+check("bardzo waski ekran: kafelek zostaje na tyle szeroki, zeby go trafic",
+  hourWidthBox.guideHourWidth(200, 3) === 120);
+check("szerokosc godziny bierze sie z guideHourWidth, nie z samego minimum",
+  src.indexOf("guide.hourWidth = guideHourWidth(inner - columnWidth, guide.hours);") > 0 &&
+  src.indexOf("guide.hourWidth = Math.max(GUIDE_HOUR_MIN_W,") < 0);
 check("os czasu dosuwa sie razem z podswietleniem, a nie samo z siebie",
   src.indexOf("function guideNeighbourProgram(channel, time, dir)") > 0 &&
   src.indexOf("target.start - (target.start % 3600000)") > 0 &&
@@ -1130,6 +1193,21 @@ check("z archiwum ◀ znajduje poprzedni program, a ▶ nigdy nie wchodzi w przy
   neighbourBox.guideNeighbourProgram(archChannel, NOW_EPG - 1800000, -1).title === "poprzedni" &&
   neighbourBox.guideNeighbourProgram(archChannel, NOW_EPG + 1800000, -1).title === "teraz" &&
   neighbourBox.guideNeighbourProgram(archChannel, NOW_EPG + 1800000, 1) === null);
+/* Ta sama lista w kolejnosci, w jakiej trzyma ja aplikacja (parseXmltv sortuje od
+   najnowszego). Stara wersja przerywala petle na pierwszym przyszlym programie,
+   wiec na danych z serwera ◀ ▶ nie znajdowaly nikogo i os czasu jechala sama. */
+const neighbourDescBox = run(src.slice(programsAt, programsEnd) + src.slice(neighbourAt, neighbourEnd), {
+  Date: { now: function () { return NOW_EPG; } },
+  state: { programs: { c2: EPG_LIST.slice().reverse() } },
+  epgAliases: {},
+  hasArchive: function (channel) { return !!channel.catchupSource; }
+});
+check("na danych z serwera (od najnowszego) ◀ ▶ tez znajduja sasiada po osi",
+  neighbourDescBox.guideNeighbourProgram(archChannel, NOW_EPG - 1800000, -1).title === "poprzedni" &&
+  neighbourDescBox.guideNeighbourProgram(archChannel, NOW_EPG - 5400000, 1).title === "poprzedni" &&
+  neighbourDescBox.guideNeighbourProgram(archChannel, NOW_EPG + 1800000, -1).title === "teraz" &&
+  neighbourDescBox.guideNeighbourProgram(archChannel, NOW_EPG - 1800000, 1).title === "teraz" &&
+  neighbourDescBox.guideNeighbourProgram(archChannel, NOW_EPG + 1800000, 1) === null);
 
 /* --- ◀ ▶ chodzą po programach: co dokładnie robi guideStepProgram ----------
    Wiersz obsługujemy przez podmienione funkcje siatki (fokus, dosunięcie,
@@ -1137,6 +1215,11 @@ check("z archiwum ◀ znajduje poprzedni program, a ▶ nigdy nie wchodzi w przy
 const stepAt = src.indexOf("function guideStepProgram(dir)");
 const stepEnd = src.indexOf("\n  }", stepAt) + 4;
 if (stepAt < 0) throw new Error("Nie znalazlem guideStepProgram w app.js");
+/* sasiada w wierszu wybiera guideRowBlocks — kafelki po kolei na osi czasu
+   (w DOM sa od najnowszego, wiec sam numer w DOM nie wystarcza) */
+const rowBlocksAt = src.indexOf("function guideRowBlocks(row)");
+const rowBlocksEnd = src.indexOf("\n  }", rowBlocksAt) + 4;
+if (rowBlocksAt < 0) throw new Error("Nie znalazlem guideRowBlocks w app.js");
 function stepHarness(o) {
   const calls = { focused: [], revealed: [], panned: [], windows: [], rowBlocks: [], fitted: [] };
   const blocks = o.blocks || [];
@@ -1176,7 +1259,7 @@ function stepHarness(o) {
     },
     focusGuideRowBlock: function (index, time, sameTime) { calls.rowBlocks.push([index, time, sameTime]); }
   };
-  run(src.slice(stepAt, stepEnd), sandbox);
+  run(src.slice(rowBlocksAt, rowBlocksEnd) + src.slice(stepAt, stepEnd), sandbox);
   return { calls: calls, step: sandbox.guideStepProgram };
 }
 function fakeBlock(id, attrs) {
@@ -1239,6 +1322,28 @@ function headerButton() {
   h.step(-1);
   check("fokus w naglowku: ◀ nadal przesuwa os czasu",
     h.calls.panned[0] === -1 && h.calls.focused.length === 0 && h.calls.windows.length === 0);
+})();
+/* Kafelki w DOM ida od najnowszego (parseXmltv), wiec ◀ ▶ musza brac sasiada
+   z osi czasu, a nie z numeru w DOM — inaczej pilot szedl w druga strone. */
+(function () {
+  const early = fakeBlock("early", { "data-start": 2000000, "data-end": 3000000 });
+  const middle = fakeBlock("middle", { "data-start": 3000000, "data-end": 4000000 });
+  const late = fakeBlock("late", { "data-start": 4000000, "data-end": 5000000 });
+  const h = stepHarness({ blocks: [late, middle, early], active: middle });
+  h.step(-1);
+  check("◀ na danych z serwera idzie na wczesniejszy program (kafelek z lewej)",
+    h.calls.focused[0] === early && h.calls.revealed[0] === early &&
+    h.calls.panned.length === 0);
+})();
+(function () {
+  const early = fakeBlock("early", { "data-start": 2000000, "data-end": 3000000 });
+  const middle = fakeBlock("middle", { "data-start": 3000000, "data-end": 4000000 });
+  const late = fakeBlock("late", { "data-start": 4000000, "data-end": 5000000 });
+  const h = stepHarness({ blocks: [late, middle, early], active: middle });
+  h.step(1);
+  check("▶ na danych z serwera idzie na pozniejszy program (kafelek z prawej)",
+    h.calls.focused[0] === late && h.calls.revealed[0] === late &&
+    h.calls.panned.length === 0);
 })();
 
 /* --- ▲ ▼ chodzą o kanał: co dokładnie robi guideStepRow -------------------- */

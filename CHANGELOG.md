@@ -25,6 +25,18 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.16] — 2026-10-07
+
+### Zmieniono
+- **Lista programów czyta się w trzech liniach** — data z rokiem, godzina od–do i dopiero pod nimi nazwa programu z podpisem LIVE / ODTWARZANE (wcześniej data i godzina stały sklejone, „07.10 11:00–12:00”, i wyglądały jak jedna liczba).
+
+### Dodano
+- **Nazwa programu pod podświetleniem stoi nad siatką** — podpis pokazuje pełną nazwę i godziny tego, na czym stoi pilot, więc program widać nawet wtedy, gdy krótki wpis na osi ucina tytuł wielokropkiem.
+
+### Poprawiono
+- **◀ ▶ w programie TV idą w stronę, którą pokazuje pilot** — sąsiada na osi wybieramy po godzinie programu, a nie po kolejności kafelków, więc „w lewo” nie przechodzi już w prawo i podświetlenie nie „odnajduje się” dopiero na skraju zakresu.
+- **Program pod podświetleniem zostaje widoczny w całości** — oś czasu nie wystaje już za prawą krawędź na ekranie, który nie mieści trzech godzin, a widok zostaje na początku osi, więc żaden program (ani jego nazwa) nie ląduje poza ekranem.
+
 ## [2.1.15] — 2026-10-07
 
 ### Zmieniono

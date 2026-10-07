@@ -288,6 +288,10 @@ aside {
   border-radius: var(--radius-sm);
 }
 .program time { display: block; color: var(--accent); font-size: 17px; font-weight: 600; }
+/* Data nad godziną: pełny dzień z rokiem, bo lista programów sięga kilka dni
+   wstecz (patrz formatDay w www/app.js) — godzina od–do zostaje w linii niżej,
+   a nazwa programu i podpis LIVE / ODTWARZANE pod nimi. */
+.program-date { display: block; color: var(--muted); font-size: 15px; font-weight: 600; }
 .program span { display: block; margin-top: 5px; }
 
 /* ---------- program tv (EPG) ---------- */
@@ -310,6 +314,10 @@ aside {
 }
 .guide-corner { width: 260px; flex: none; }
 .guide-pan-hint { margin-left: 16px; color: var(--muted); font-size: 15px; }
+/* Nazwa programu pod podświetleniem — pełna i zawsze w tym samym miejscu, także
+   wtedy, gdy wąski kafelek (krótki program na osi) ucina tytuł wielokropkiem
+   (patrz guideFocusNote w www/app.js). */
+.guide-focus-name { color: var(--accent); font-size: 15px; font-weight: 600; }
 .guide-hour {
   flex: none;
   padding: 9px 0 9px 12px;
@@ -799,6 +807,8 @@ body.uimode-tv .category { padding: 19px 22px; font-size: 24px; }
 body.uimode-tv button { padding: 16px 26px; }
 body.uimode-tv .program { padding: 24px 28px; }
 body.uimode-tv .program time { font-size: 20px; }
+body.uimode-tv .program-date { font-size: 17px; }
+body.uimode-tv .guide-focus-name { font-size: 17px; }
 
 /* Tani fokus: bez transformacji i cienia (na dekoderach TV to klatkowanie),
    widoczny równie dobrze, bo zamiast tego rośnie obwódka. */

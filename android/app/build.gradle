@@ -11,8 +11,8 @@ android {
         applicationId "pl.openiptv.player"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 58
-        versionName "2.1.15"
+        versionCode 59
+        versionName "2.1.16"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         /* Silnik VLC (libVLC) wchodzi do paczki tylko dla architektur telewizorów
            — patrz libvlcAbiFilters w variables.gradle. Bez tego filtra paczka
