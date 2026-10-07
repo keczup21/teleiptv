@@ -25,6 +25,12 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.19] — 2026-10-07
+
+### Poprawiono
+- **Pasek dnia w programie TV znów działa pilotem** — z nagłówka Program TV dojeżdża się teraz strzałkami do „Wczoraj”, „Przedwczoraj”, „‹ Dzień”, „Dzień ›” oraz pól daty i godziny, a ▼ wraca do siatki (wcześniej fokus stał na „Dziś”, a ◀ ▶ przesuwały tylko oś czasu).
+- **Długa nazwa programu nie spycha wyboru godziny** — tytuł podświetlonego programu jest ucinany wielokropkiem, więc pasek dnia zostaje w jednym rzędzie i data oraz godzina są pod ręką.
+
 ## [2.1.18] — 2026-10-07
 
 ### Dodano

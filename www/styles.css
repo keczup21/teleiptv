@@ -317,7 +317,10 @@ aside {
 /* Nazwa programu pod podświetleniem — pełna i zawsze w tym samym miejscu, także
    wtedy, gdy wąski kafelek (krótki program na osi) ucina tytuł wielokropkiem
    (patrz guideFocusNote w www/app.js). */
-.guide-focus-name { color: var(--accent); font-size: 15px; font-weight: 600; }
+/* Długa nazwa podświetlonego programu jest ucinana wielokropkiem (min-width:0
+   pozwala zwęzić się w wierszu nagłówka) — inaczej wypychała pasek dnia i data
+   oraz godzina spadały do drugiego rzędu. Pełny tytuł i tak jest na kafelku. */
+.guide-focus-name { color: var(--accent); font-size: 15px; font-weight: 600; min-width: 0; max-width: 42vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .guide-hour {
   flex: none;
   padding: 9px 0 9px 12px;
@@ -1204,6 +1207,9 @@ body.uimode-tv .osd-actions { flex-wrap: wrap; }
 
 /* podpis zakresu i podpowiedź pilota stoją obok tytułu — nagłówek nie rośnie
    w trzy linie, więc siatka dostaje więcej wysokości */
+/* Lewa strona nagłówka (tytuł, zakres, nazwa podświetlenia, podpowiedź) zajmuje
+   wolne miejsce, ale nie zabiera go paskowi dnia: nazwa jest obcinana (patrz
+   .guide-focus-name), więc data i godzina zostają w tym samym rzędzie. */
 #guideScreen > header > div {
   display: flex;
   flex-wrap: wrap;
@@ -1211,6 +1217,7 @@ body.uimode-tv .osd-actions { flex-wrap: wrap; }
   column-gap: 14px;
   row-gap: 2px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 #guideScreen > header > div > span { margin-top: 0; }
 #guideScreen > header > div > strong { margin-right: 2px; }

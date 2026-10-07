@@ -1054,6 +1054,18 @@ check("podpowiedz pilota pod siatka mowi o programach, kanalach i powrocie do dn
 check("z gornego wiersza ▲ wraca do przyciskow dnia",
   src.indexOf("if (keyCode === 38) focusGuideHeader();") > 0 &&
   src.indexOf('var target = $("guideToday") || $("guideClose");') > 0);
+/* Pasek dnia w nagłówku Program TV: gdy fokus na nim stoi, ◀ ▶ chodzą po jego
+   przyciskach i polach, a ▼ wraca do siatki. Wcześniej strzałki zawsze
+   przesuwały oś czasu, więc fokus tkwił na „Dziś” i „Wczoraj”, daty ani godziny
+   nie dało się dosięgnąć pilotem. Długa nazwa programu jest ucinana, żeby nie
+   spychała paska dnia do drugiego rzędu. */
+check("strzalki w pasku dnia chodza po jego przyciskach, a nie po osi czasu",
+  src.indexOf('var guideHead = $("guideScreen").querySelector("header");') > 0 &&
+  src.indexOf("if (guideHead && guideHead.contains(document.activeElement)) {") > 0 &&
+  src.indexOf("if (key === 40) { focusGuide(40); return; }") > 0 &&
+  src.indexOf("focusNearest(key === 37 || key === 412 ? 37 : 39);") > 0);
+check("dluga nazwa programu jest ucinana, a nie spycha paska dnia",
+  css.indexOf("min-width: 0; max-width: 42vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;") > 0);
 /* ▲ ▼ przenoszą podświetlenie o jeden kanał (wiersz), na program z tego samego
    momentu (guideFocusTime) — wcześniej szukały najbliższego kafelka po
    współrzędnych, więc podświetlenie uciekało w bok po osi czasu. Kanały bez
