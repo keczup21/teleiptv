@@ -627,6 +627,11 @@ body.exo-player .player-overlay {
 .progress { height: 8px; background: rgba(255,255,255,.16); border-radius: 999px; overflow: hidden; }
 .progress i { display: block; height: 100%; background: var(--grad); width: 0; border-radius: 999px; }
 .player-time { color: var(--muted); font-size: 16px; font-variant-numeric: tabular-nums; }
+/* rząd paska odtwarzacza: sam pasek, a przy prawej krawędzi — ile zostało do
+   końca programu albo nagrania (hh:mm, patrz formatRemaining w app.js) */
+.osd-progress { display: flex; align-items: center; gap: 14px; }
+.osd-progress .progress { flex: 1; min-width: 0; }
+.player-remain { color: var(--muted); font-size: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* wpis o przewinięciu archiwum („Cofnięto o 10 s”) — ten sam kolor co plakietka
    catch-upu, bo dotyczy tego samego: materiału z archiwum, nie kanału na żywo */
 .player-seek {
@@ -989,6 +994,7 @@ body.uimode-touch .guide-channel { width: 150px; }
 body.uimode-touch .player-overlay { left: 12px; right: 12px; bottom: 12px; padding: 16px 18px; }
 body.uimode-touch .osd-actions { flex-wrap: wrap; }
 body.uimode-touch .progress { height: 6px; }
+body.uimode-touch .player-remain { font-size: 14px; }
 
 /* ---------- OSD odtwarzacza (mini-EPG dla oglądanego kanału) ---------- */
 .osd-head { display: flex; align-items: center; gap: 16px; }

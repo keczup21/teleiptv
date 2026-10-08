@@ -25,6 +25,11 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.26] — 2026-10-07
+
+### Dodano
+- **Czas pozostały po prawej stronie paska odtwarzacza** — po wywołaniu paska widać przy jego prawej krawędzi, ile zostało do końca: na kanale na żywo do końca bieżącego programu, a w nagraniu z archiwum do końca materiału; licznik w godzinach i minutach (hh:mm) odświeża się razem z paskiem.
+
 ## [2.1.25] — 2026-10-07
 
 ### Poprawiono

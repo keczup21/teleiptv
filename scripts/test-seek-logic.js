@@ -753,6 +753,35 @@ check("nagranie VLC: ⏪ w srodku programu idzie krokiem jak dotad",
   h.calls.seek.length === 1 && h.calls.seek[0] === 990000,
   JSON.stringify(h.calls.seek));
 
+/* --- 5. czas pozostały na pasku (formatRemaining): zawsze hh:mm, z minusem -
+   Pasek odtwarzacza dopisuje po prawej stronie, ile zostało do końca programu
+   albo nagrania. Format ma być stały (godziny i minuty, obie części
+   dwucyfrowe), więc sprawdzamy wycięty z app.js kod, a nie jego kopię. */
+function sliceFn(name) {
+  const start = src.indexOf("function " + name + "(");
+  if (start < 0) throw new Error("Nie znalazlem " + name + " w app.js");
+  const end = src.indexOf("\n  }", start);
+  if (end < 0) throw new Error("Nie znalazlem konca " + name);
+  return src.slice(start, end + 4);
+}
+const remainSandbox = {};
+vm.createContext(remainSandbox);
+vm.runInContext(sliceFn("pad2") + "\n" + sliceFn("formatRemaining"), remainSandbox);
+check("czas pozostały: godziny i minuty, obie części dwucyfrowe",
+  remainSandbox.formatRemaining(3600) === "-01:00" &&
+  remainSandbox.formatRemaining(5400) === "-01:30" &&
+  remainSandbox.formatRemaining(7200) === "-02:00",
+  remainSandbox.formatRemaining(3600));
+check("czas pozostały: mniej niż godzina to 00:mm, z zaokrągleniem do minuty",
+  remainSandbox.formatRemaining(2700) === "-00:45" &&
+  remainSandbox.formatRemaining(60) === "-00:01" &&
+  remainSandbox.formatRemaining(30) === "-00:01",
+  remainSandbox.formatRemaining(2700));
+check("czas pozostały: zero i wartości ujemne pokazywane jako -00:00",
+  remainSandbox.formatRemaining(0) === "-00:00" &&
+  remainSandbox.formatRemaining(-30) === "-00:00",
+  remainSandbox.formatRemaining(0));
+
 console.log("");
 if (fails) { console.log("BLEDY: " + fails); process.exit(1); }
 console.log("Wszystkie scenariusze przeszly.");

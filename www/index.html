@@ -312,7 +312,11 @@
         <strong id="playerTitle"></strong>
       </div>
       <div id="playerNow" class="osd-now"></div>
-      <div class="progress"><i id="playerProgress"></i></div>
+      <!-- pasek postępu; po jego prawej stronie czas pozostały (patrz playerRemain) -->
+      <div class="osd-progress">
+        <div class="progress"><i id="playerProgress"></i></div>
+        <span id="playerRemain" class="player-remain"></span>
+      </div>
       <div class="osd-meta">
         <span id="playerTime" class="player-time"></span>
         <span id="playerSeek" class="player-seek hidden"></span>

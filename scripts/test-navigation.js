@@ -973,6 +973,20 @@ check("kolejne nacisniecia pilota sumuja sie w jednym wpisie",
 check("pasek odtwarzacza odswieza wpis razem z reszta wskazan",
   src.indexOf("updateOsdProgress();\n    refreshSeekNotice();") > 0);
 
+/* --- 20a. czas pozostały po prawej stronie paska (hh:mm) -------------------
+   Pasek odtwarzacza dopisuje, ile pozostało do końca programu albo nagrania.
+   Ma siedzieć po prawej stronie samego paska i liczyć się razem z jego
+   odświeżaniem (patrz formatRemaining / setOsdRemain w app.js). */
+check("pasek pokazuje po prawej stronie ile zostało do końca",
+  html.indexOf('id="playerRemain"') > 0 && html.indexOf('class="player-remain"') > 0 &&
+  css.indexOf(".osd-progress {") > 0 && css.indexOf(".player-remain {") > 0 &&
+  src.indexOf("function formatRemaining(seconds)") > 0 &&
+  src.indexOf("function setOsdRemain(seconds)") > 0);
+check("czas pozostały liczy sie na zywo, w archiwum i przez silnik odbiornika",
+  src.indexOf("setOsdRemain(total - at / 1000);") > 0 &&
+  src.indexOf("setOsdRemain(windowSeconds - where);") > 0 &&
+  src.indexOf("setOsdRemain(now ? (now.end - Date.now()) / 1000 : null);") > 0);
+
 /* --- 21. przewijanie z pilota: warianty klawiszy ⏪ ⏩ ----------------------
    Jeden przycisk ⏪ / ⏩, a dekodery wysylaja go roznymi kodami: webOS
    412/417, Android TV i Fire TV 89/90, a czesc pilotow klawisze „poprzedni /

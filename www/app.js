@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.25";
+  var APP_VERSION = "2.1.26";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -7180,6 +7180,14 @@
       (rest < 10 ? "0" : "") + rest;
   }
 
+  /* Ile zostało do końca w formacie hh:mm — pasek odtwarzacza pokazuje to po
+     prawej stronie (patrz #playerRemain). Zaokrąglamy do pełnej minuty i dajemy
+     minus, bo to czas, który dopiero upłynie. */
+  function formatRemaining(seconds) {
+    var whole = Math.max(0, Math.round(seconds / 60));
+    return "-" + pad2(Math.floor(whole / 60)) + ":" + pad2(whole % 60);
+  }
+
   /* -------------------------  PRZEWIJANIE EKRANU  --------------------------
      Fokus ma zostać na ekranie, ale nie przy samej krawędzi. Wcześniej
      `scrollIntoView(false)` wyrównywał sfokusowany element do dolnej krawędzi,
@@ -8760,6 +8768,20 @@
     if (muteButton) setIconLabel(muteButton, muteLabel());
   }
 
+  /* Czas pozostały po prawej stronie paska (#playerRemain). Bez danych (kanał
+     bez EPG, nieznana długość okna) element znika, żeby nie wisiał pusty. */
+  function setOsdRemain(seconds) {
+    var el = $("playerRemain");
+    if (!el) return;
+    if (seconds === null || seconds === undefined || !isFinite(seconds)) {
+      el.textContent = "";
+      el.classList.add("hidden");
+      return;
+    }
+    el.textContent = formatRemaining(seconds);
+    el.classList.remove("hidden");
+  }
+
   /* tanie odświeżanie (timeupdate / zegar): tylko pasek postępu i czas */
   function updateOsdProgress() {
     var channel = state.watchChannel;
@@ -8785,6 +8807,7 @@
         vlcTimeEl.textContent = formatTime(at / 1000) + " / " + formatTime(total) +
           (isMuted() ? " • " + t("osd_muted") : "");
       }
+      setOsdRemain(total - at / 1000);
       return;
     }
 
@@ -8798,6 +8821,7 @@
         timeEl.textContent = formatTime(where) + " / " + formatTime(windowSeconds) +
           (isMuted() ? " • " + t("osd_muted") : "");
       }
+      setOsdRemain(windowSeconds - where);
       return;
     }
 
@@ -8806,6 +8830,7 @@
     bar.style.width = now
       ? Math.max(0, Math.min(100, (Date.now() - now.start) / (now.end - now.start) * 100)) + "%"
       : "0%";
+    setOsdRemain(now ? (now.end - Date.now()) / 1000 : null);
   }
 
   /* ------------------------  MENU OPCJI KANAŁU (pilot)  ------------------------ */
