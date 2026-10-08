@@ -132,19 +132,41 @@ header nav input {
 }
 header nav input::placeholder { color: var(--faint); }
 header nav select { padding: 12px 16px; border-radius: 999px; border: 2px solid var(--field-border); background: var(--field-bg); }
-/* Podpis „Program EPG” na samej górze listy otwieranej z odtwarzacza (przycisk
-   „EPG”). Pokazuje się tylko w tej drodze (patrz openArchive w app.js). */
+/* ---------- nagłówek listy programów (archiwum / EPG z odtwarzacza) --------
+   Podpis, nazwa kanału i przyciski „Na żywo”/„Wstecz” stoją jeden pod drugim,
+   więc po otwarciu listy z paska „EPG” widać je od razu — nie trzeba ich
+   szukać pilotem po ekranie. */
+#archiveScreen { display: flex; flex-direction: column; }
+#archiveScreen header.archive-header {
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+  height: auto;
+  min-height: 0;
+  padding: 16px 32px 14px;
+}
+/* lista przewija się sama, a nagłówek z przyciskami zostaje na górze; bez tego
+   cała lista spychała nagłówek poza ekran i „Na żywo”/„Wstecz” trzeba było
+   szukać przyciskiem ▲ (por. #browserScreen wyżej) */
+#archiveScreen .programs { flex: 1; min-height: 0; }
+.archive-titles { min-width: 0; }
+.archive-nav { justify-content: flex-start; }
+/* Podpis „Program EPG - nazwa kanału” na samej górze listy otwieranej
+   z odtwarzacza (przycisk „EPG”). Wypełnia i pokazuje go tylko ta droga
+   (patrz openArchive w app.js); w zwykłym archiwum zostaje ukryty. */
 .archive-heading {
   flex: none;
-  padding: 14px 32px 10px;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  letter-spacing: .4px;
-  text-transform: uppercase;
-  color: var(--muted);
+  letter-spacing: .2px;
+  color: var(--text);
 }
-body.uimode-tv .archive-heading { padding: 18px 56px 10px; font-size: 24px; }
-body.uimode-touch .archive-heading { padding: 10px 14px 4px; font-size: 16px; }
+body.uimode-tv #archiveScreen header.archive-header { padding: 20px 56px 16px; }
+body.uimode-tv .archive-heading { font-size: 26px; }
+body.uimode-touch #archiveScreen header.archive-header { padding: 12px 14px 8px; }
+body.uimode-touch .archive-heading { font-size: 18px; }
 .icon-button {
   display: inline-flex;
   align-items: center;
@@ -1183,12 +1205,12 @@ body.uimode-tv .update-row button { font-size: 22px; padding: 18px 24px; }
 .program-title-row { display: block; margin-top: 5px; }
 .program .program-title-row .program-title { display: inline; margin-top: 0; }
 .program .program-note { display: block; margin-top: 5px; color: var(--faint); font-size: 15px; }
-/* program, który leci teraz: obwódka akcentu i podpis LIVE przy tytule */
-.program.now { border-color: var(--accent); }
+/* program, który leci teraz — sam akcent godziny i podpis LIVE przy tytule;
+   mocna obwódka (podświetlenie) należy tylko do wpisu wybieranego pilotem,
+   więc na liście nie świecą się dwa miejsca naraz */
 .program.now time { color: var(--accent); }
-/* program odtwarzany teraz z archiwum (lista otwarta z odtwarzacza) — obwódka
-   akcentu i podpis przy tytule, patrz programEntry */
-.program.playing { border-color: var(--accent); }
+/* program odtwarzany teraz z archiwum (lista otwarta z odtwarzacza) — tak samo
+   tylko akcent godziny, patrz programEntry */
 .program.playing time { color: var(--accent); }
 /* program, który dopiero będzie: widoczny, ale nie do wyboru (brak archiwum) */
 .program.future { opacity: .55; }

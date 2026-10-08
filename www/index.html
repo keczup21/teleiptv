@@ -262,14 +262,18 @@
   </main>
 
   <main id="archiveScreen" class="screen hidden">
-    <!-- Podpis „Program EPG” na samej górze listy otwieranej z odtwarzacza
-         (przycisk „EPG”). Pokazuje go tylko ta droga — patrz openArchive. -->
-    <div id="archiveHeading" class="archive-heading hidden" data-i18n="epg_panel_title">Program EPG</div>
-    <header>
-      <div><strong id="archiveTitle" data-i18n="archive">Archiwum</strong><span id="archiveSubtitle"></span></div>
-      <nav>
+    <header class="archive-header">
+      <!-- Podpis „Program EPG - nazwa kanału” na samej górze listy otwieranej
+           z odtwarzacza (przycisk „EPG”). Wypełnia go openArchive, a pokazuje
+           tylko ta droga; w zwykłym archiwum pasek zostaje ukryty. -->
+      <div id="archiveHeading" class="archive-heading hidden" data-i18n="epg_panel_title">Program EPG</div>
+      <div class="archive-titles">
+        <strong id="archiveTitle" data-i18n="archive">Archiwum</strong><span id="archiveSubtitle"></span>
+      </div>
+      <nav class="archive-nav">
         <!-- „Na żywo” wraca do bieżącej chwili na tym kanale (także z listy
-             programów otwartej przyciskiem EPG w odtwarzaczu) -->
+             programów otwartej przyciskiem EPG w odtwarzaczu). Przyciski stoją
+             pod podpisem, więc widać je od razu po otwarciu listy. -->
         <button id="archiveLive" tabindex="0" class="labeled-button" data-i18n="osd_live">⏵ Na żywo</button>
         <button id="archiveClose" tabindex="0" data-i18n="back">Wstecz</button>
       </nav>

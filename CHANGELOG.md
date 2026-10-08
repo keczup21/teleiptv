@@ -25,6 +25,15 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.21] — 2026-10-07
+
+### Zmieniono
+- **Podpis „Program EPG - nazwa kanału” nad przyciskami listy programów** — lista otwierana przyciskiem „EPG” w odtwarzaczu ma teraz na górze podpis „Program EPG - nazwa kanału”, a pod nim przyciski „Na żywo” i „Wstecz”; widać je od razu po otwarciu listy (wcześniej nagłówek uciekał poza ekran i trzeba było szukać przycisków przyciskiem ▲).
+
+### Poprawiono
+- **Jedno podświetlenie na liście programów** — program LIVE i odtwarzany znaczy teraz sama akcentowa godzina i podpis przy nazwie, więc świeci się tylko wpis wybierany pilotem (wcześniej obwódka świeciła się i na programie bieżącym, i na wybieranym — dwa podświetlenia naraz).
+- **Wyjście z odtwarzacza nie zostawia EPG na pełnym ekranie** — „Na żywo” z listy otwartej w odtwarzaczu wraca po wyjściu z obrazu do listy kanałów, a nie na pełnoekranową listę programów (wcześniej EPG wyskakiwało na cały ekran i znikało dopiero po Wstecz).
+
 ## [2.1.20] — 2026-10-07
 
 ### Dodano

@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.20";
+  var APP_VERSION = "2.1.21";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -3513,14 +3513,21 @@
       }
     }
 
-    $("archiveTitle").textContent = fromPlayer
-      ? t("epg_list_title", { name: channel.name })
-      : t("archive_title") + channel.name;
     /* Lista otwarta z paska „EPG” w odtwarzaczu dostaje na samej górze podpis
-       „Program EPG” — widać wprost, że to program oglądanego kanału, a nie
-       archiwum z listy kanałów. W zwykłym archiwum pasek zostaje ukryty. */
+       „Program EPG - nazwa kanału” — widać wprost, że to program oglądanego
+       kanału, a nie archiwum z listy kanałów. Nazwa idzie więc do podpisu, a
+       nie do nagłówka, żeby nie stała dwa razy. W zwykłym archiwum podpis
+       zostaje ukryty, a nazwa wraca do nagłówka. */
     var heading = $("archiveHeading");
-    if (heading) heading.classList.toggle("hidden", !fromPlayer);
+    var title = $("archiveTitle");
+    if (heading) {
+      heading.classList.toggle("hidden", !fromPlayer);
+      if (fromPlayer) heading.textContent = t("epg_panel_title") + " - " + channel.name;
+    }
+    if (title) {
+      title.classList.toggle("hidden", fromPlayer);
+      title.textContent = fromPlayer ? "" : t("archive_title") + channel.name;
+    }
     $("archiveSubtitle").textContent = fromPlayer
       ? t("epg_list_hint") + t("epg_list_days", { days: days })
       : days + t("days_back");
@@ -3652,10 +3659,13 @@
     showScreen(target);
   }
 
-  /* „Na żywo” nad listą programów: wraca do bieżącej chwili na tym kanale */
+  /* „Na żywo” nad listą programów: wraca do bieżącej chwili na tym kanale.
+     Lista otwarta z paska „EPG” w odtwarzaczu była tylko wyborem materiału,
+     więc po wyjściu z obrazu wracamy do listy kanałów, a nie na pełnoekranową
+     listę programów (ta droga zostaje dla archiwum z listy kanałów). */
   function playArchiveLive() {
     if (!archive.channel) return;
-    playChannel(archive.channel, null, "archiveScreen");
+    playChannel(archive.channel, null, archive.fromPlayer ? "browserScreen" : "archiveScreen");
   }
 
   /* ==============================  CATCH-UP  ============================== */

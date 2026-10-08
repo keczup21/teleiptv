@@ -831,6 +831,31 @@ check("„Na zywo” nad lista wraca do biezacej chwili",
   src.indexOf("if (archiveLive) archiveLive.onclick = playArchiveLive;") > 0);
 check("lista otwarta z odtwarzacza wraca potem do listy kanalow",
   src.indexOf('playChannel(channel, program, fromPlayer ? "browserScreen" : "archiveScreen");') > 0);
+/* „Na żywo” z listy otwartej w odtwarzaczu też wraca do listy kanałów. Wcześniej
+   wołało archiveScreen, więc po wyjściu z obrazu lista programów wyskakiwała na
+   całym ekranie — to był błąd „EPG na pełnym ekranie po wyjściu z odtwarzacza”. */
+check("„Na zywo” z listy otwartej w odtwarzaczu wraca do listy kanalow",
+  src.indexOf('playChannel(archive.channel, null, archive.fromPlayer ? "browserScreen" : "archiveScreen");') > 0);
+/* Podpis „Program EPG - nazwa kanału” i przyciski „Na żywo”/„Wstecz” stoją razem
+   w nagłówku listy, jeden pod drugim, a nie trzeba ich szukać pilotem po ekranie. */
+check("podpis Program EPG - nazwa kanalu nad przyciskami listy",
+  html.indexOf('class="archive-header"') > 0 &&
+  html.indexOf('id="archiveHeading"') > 0 &&
+  html.indexOf('class="archive-nav"') > 0 &&
+  src.indexOf('heading.textContent = t("epg_panel_title") + " - " + channel.name;') > 0 &&
+  css.indexOf("#archiveScreen header.archive-header") > 0);
+/* Lista programów przewija się sama, a nagłówek z przyciskami zostaje na górze,
+   więc „Na żywo”/„Wstecz” widać od razu po otwarciu — bez szukania przyciskiem ▲. */
+check("naglowek listy programow zostaje na gorze (lista przewija sie sama)",
+  css.indexOf("#archiveScreen { display: flex; flex-direction: column; }") > 0 &&
+  css.indexOf("#archiveScreen .programs { flex: 1; min-height: 0; }") > 0);
+/* Na liście programów mocne podświetlenie (obwódka) należy tylko do wpisu
+   wybieranego pilotem — program LIVE i odtwarzany znaczy sama akcentowa godzina
+   i podpis, więc nie świecą się dwa miejsca naraz. */
+check("lista programow bez drugiego podswietlenia na programie LIVE",
+  css.indexOf(".program.now { border-color: var(--accent); }") < 0 &&
+  css.indexOf(".program.playing { border-color: var(--accent); }") < 0 &&
+  css.indexOf(".program.now time { color: var(--accent); }") > 0);
 /* Lista otwarta z paska „EPG” ma od razu stać na tym, co leci teraz. Wcześniej
    fokus dostawał pierwszy wpis z góry, a tam są programy z przyszłości
    (najnowszy start jest pierwszy) — wyłączony przycisk nie przyjmuje jednak
@@ -3997,7 +4022,7 @@ check("lista i siatka EPG podpisuja odtwarzany material, a lista staje na nim fo
   src.indexOf("archive.playingButton = button;") > 0 &&
   src.indexOf('block.classList.toggle("playing", watching);') > 0 &&
   src.indexOf("if (fromPlayer && live) {") > 0 &&
-  css.indexOf(".program.playing {") > 0 &&
+  css.indexOf(".program.playing time {") > 0 &&
   css.indexOf(".program-playing {") > 0 &&
   src.indexOf('program_playing: "ODTWARZANE"') > 0 &&
   src.indexOf('program_playing: "PLAYING"') > 0);
