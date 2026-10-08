@@ -132,6 +132,19 @@ header nav input {
 }
 header nav input::placeholder { color: var(--faint); }
 header nav select { padding: 12px 16px; border-radius: 999px; border: 2px solid var(--field-border); background: var(--field-bg); }
+/* Podpis „Program EPG” na samej górze listy otwieranej z odtwarzacza (przycisk
+   „EPG”). Pokazuje się tylko w tej drodze (patrz openArchive w app.js). */
+.archive-heading {
+  flex: none;
+  padding: 14px 32px 10px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+body.uimode-tv .archive-heading { padding: 18px 56px 10px; font-size: 24px; }
+body.uimode-touch .archive-heading { padding: 10px 14px 4px; font-size: 16px; }
 .icon-button {
   display: inline-flex;
   align-items: center;

@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.19";
+  var APP_VERSION = "2.1.20";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -41,7 +41,7 @@
   /* Ile pikseli przed ekranem wczytujemy logotyp kanału (resztę leniwie) */
   var LOGO_MARGIN = 800;
   /* Po ilu ms samoczynnie znika pasek informacyjny odtwarzacza */
-  var OSD_AUTOHIDE = 6000;
+  var OSD_AUTOHIDE = 20000;
   /* Po jakim czasie trzymania OK otwiera się menu opcji kanału (TV) */
   var OK_HOLD_MS = 700;
   /* Ile czekamy na obraz, zanim uznamy, że dany sposób odtwarzania zawiódł */
@@ -150,6 +150,10 @@
     seekDirection: 0,
     seekSize: 0,
     osdTimer: null,
+    /* kotwica skoku w nagraniu VLC: cel ostatniego skoku i chwila zlecenia
+       (patrz seekAnchorMs) */
+    vlcPendingSeek: 0,
+    vlcPendingAt: 0,
     osdTicker: null,
     /* Pasek otwarty klawiszem OK / dotknięciem to menu: ▲ ▼ chodzą wtedy po jego
        przyciskach („Pauza”, „EPG”, …), a nie po kanałach. Pasek pokazany przy
@@ -653,6 +657,7 @@
     help_update: "AKTUALIZACJA",
     help_update_text: "Aktualizacja siedzi we własnej zakładce „Aktualizacja”: nic nie instaluje się samo, a pobranie paczki uruchamia dopiero przycisk.",
     epg_list_title: "Program • {name}",
+    epg_panel_title: "Program EPG",
     epg_list_hint: "poprzednie • teraz • następne",
     epg_list_days: " • {days} dni wstecz",
     epg_list_future: "jeszcze nie było"
@@ -962,6 +967,7 @@
     help_update: "UPDATES",
     help_update_text: "Updates live in their own “Update” tab: nothing installs itself, and only the button downloads the package.",
     epg_list_title: "Guide • {name}",
+    epg_panel_title: "EPG guide",
     epg_list_hint: "previous • now • next",
     epg_list_days: " • {days} days back",
     epg_list_future: "not aired yet"
@@ -3510,6 +3516,11 @@
     $("archiveTitle").textContent = fromPlayer
       ? t("epg_list_title", { name: channel.name })
       : t("archive_title") + channel.name;
+    /* Lista otwarta z paska „EPG” w odtwarzaczu dostaje na samej górze podpis
+       „Program EPG” — widać wprost, że to program oglądanego kanału, a nie
+       archiwum z listy kanałów. W zwykłym archiwum pasek zostaje ukryty. */
+    var heading = $("archiveHeading");
+    if (heading) heading.classList.toggle("hidden", !fromPlayer);
     $("archiveSubtitle").textContent = fromPlayer
       ? t("epg_list_hint") + t("epg_list_days", { days: days })
       : days + t("days_back");
@@ -5871,6 +5882,8 @@
        (patrz playChannel) */
     state.vlcTime = 0;
     state.vlcLength = 0;
+    state.vlcPendingSeek = 0;
+    state.vlcPendingAt = 0;
   }
 
   /* Zdarzenia z silnika VLC (VlcEngine → emitVlc). Trzymają ten sam stan, co
@@ -6585,6 +6598,8 @@
        opisywać nowego (patrz vlcEvent, seekBy, updateOsdProgress) */
     state.vlcTime = 0;
     state.vlcLength = 0;
+    state.vlcPendingSeek = 0;
+    state.vlcPendingAt = 0;
     markExoMode(false);
     /* nazwa kanału mówi wprost, że to 4K — rozpoznajemy to przed startem
        odtwarzania, żeby wymuszona warstwa obrazu nie zdążyła wejść kanałowi
@@ -6967,6 +6982,28 @@
      Silnik bez zegara (odtwarzacz systemowy, okno o nieznanej długości) nie ma
      po czym skakać — zostaje zmiana okna catch-up, dokładnie tak, jak dla
      elementu <video> bez długości: ⏪ bierze dłuższe okno, ⏩ wraca na żywo. */
+  /* ---  KOTWICA SKOKU (VLC): pozycja, od której liczymy krok ⏪/⏩  ---
+     Most przyjmuje skok od razu, ale swój zegar (zdarzenie „time”) donosi co
+     ćwierć sekundy — przez chwilę po skoku melduje więc miejsce sprzed niego.
+     Gdy drugie ⏩ liczyło krok od tej starej pozycji, wychodziło „o jeden krok
+     za mało” albo skok wcale nie ruszał (dokładnie jak w zgłoszeniu z kanapy).
+     Dlatego przez moment po skoku liczymy od zapamiętanego celu, dopóki silnik
+     nie doniesie, że jest już blisko niego. */
+  var VLC_SEEK_SETTLE = 4000;
+  var VLC_SEEK_TOLERANCE = 1500;
+
+  function seekAnchorMs() {
+    var here = state.vlcTime | 0;
+    var pending = state.vlcPendingSeek | 0;
+    if (pending > 0 && Date.now() - state.vlcPendingAt <= VLC_SEEK_SETTLE) {
+      if (Math.abs(here - pending) > VLC_SEEK_TOLERANCE) return pending;
+      /* silnik doniósł pozycję blisko celu — skok się wykonał, kotwica zbędna */
+      state.vlcPendingSeek = 0;
+      state.vlcPendingAt = 0;
+    }
+    return here;
+  }
+
   function seekArchiveHardware(direction, step) {
     var stepMs = step * 1000;
     if (!vlcActive() || state.vlcLength <= 0) {
@@ -6979,7 +7016,10 @@
       return;
     }
 
-    var at = state.vlcTime | 0;
+    /* Pozycja, od której liczymy krok: świeżo zlecony skok jest jeszcze „w drodze”
+       do silnika, a ten donosi przez chwilę starą pozycję — bez kotwicy drugie ⏩
+       pod rząd liczyło krok od miejsca sprzed pierwszego (patrz seekAnchorMs). */
+    var at = seekAnchorMs();
     /* koniec okna programu, który wciąż leci = powrót na żywo */
     if (direction > 0 && atLiveEdge() && at + stepMs >= state.vlcLength - 500) {
       goLive();
@@ -7003,6 +7043,10 @@
     }
     /* ile obrazu naprawdę przybyło: na krawędzi nagrania skok bywa mniejszy od
        kroku (albo zerowy) — wtedy pasek nie pisze o ruchu, którego nie było */
+    /* silnik wykona skok za chwilę, a przez ten czas donosi jeszcze starą pozycję:
+       zapamiętujemy cel, żeby kolejne ⏩ liczyły krok od niego (patrz seekAnchorMs) */
+    state.vlcPendingSeek = target;
+    state.vlcPendingAt = Date.now();
     var moved = Math.round(target / 1000) - Math.round(at / 1000);
     if (moved) markSeek(moved < 0 ? -1 : 1, Math.abs(moved));
     updateOsdProgress();
@@ -8256,6 +8300,16 @@
      kanale — mini-EPG bez opuszczania obrazu. Znika sam po OSD_AUTOHIDE ms, ale
      zostaje na ekranie, gdy obraz jest zatrzymany (klasyczne zachowanie TV). */
 
+  /* Czy obraz stoi (pauza użytkownika), a nie „stoi” tylko dlatego, że rysuje go
+     silnik odbiornika i element <video> jest wtedy bezczynny przez cały czas.
+     Bez tego pytania pasek informacyjny na Androidzie nie znikał sam (patrz
+     scheduleOsdHide), bo <video> jest tam „pauza”, choć kanał leci mostem. */
+  function osdPlaybackPaused() {
+    var video = $("video");
+    var paused = nativeLayerActive() ? !nativePlaying() : !!(video && video.paused);
+    return paused;
+  }
+
   function osdVisible() {
     var overlay = $("playerOverlay");
     return !!overlay && !overlay.classList.contains("hidden");
@@ -8337,7 +8391,7 @@
   function scheduleOsdHide() {
     clearTimeout(state.osdTimer);
     var video = $("video");
-    if (!osdVisible() || (video && video.paused)) {
+    if (!osdVisible() || osdPlaybackPaused()) {
       state.osdTimer = null;
       return;
     }

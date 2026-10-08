@@ -25,6 +25,15 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.20] — 2026-10-07
+
+### Dodano
+- **„Program EPG” na górze listy programów z odtwarzacza** — lista otwierana przyciskiem „EPG” w odtwarzaczu ma teraz na samej górze podpis „Program EPG”, więc od razu widać, że to program oglądanego kanału, a nie archiwum z listy kanałów.
+
+### Poprawiono
+- **Pasek odtwarzacza znika sam po 20 sekundach** — pasek z EPG, pauzą i „Od początku” chowa się teraz po ok. 20 s bez nawigacji, także gdy podświetlony jest któryś z jego przycisków (wcześniej na Androidzie zostawał na ekranie, bo obraz rysuje most, a nie element wideo).
+- **Krok ⏩ w catch-up zawsze o wartość z ustawień** — kolejne naciśnięcia „do przodu” liczą krok od celu poprzedniego skoku, a nie od starej pozycji z silnika, więc przewijanie nie gubi już jednego kroku.
+
 ## [2.1.19] — 2026-10-07
 
 ### Poprawiono
