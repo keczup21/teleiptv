@@ -25,6 +25,12 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.27] — 2026-10-07
+
+### Poprawiono
+- **Czas do końca na pasku ma podpis** — licznik po prawej stronie paska odtwarzacza pokazywał samo `hh:mm` z minusem, co czytało się niejasno; teraz stoi przed nim podpis „do końca”, a sam format jest bez minusa.
+- **Sposób odtwarzania nie zajmuje już paska** — napis „odtwarzacz VLC” zniknął z paska odtwarzacza, gdzie mylił się ze stanem odtwarzania; ten sam napis widać w panelu diagnostyki (wiersz „sposób odtwarzania”).
+
 ## [2.1.26] — 2026-10-07
 
 ### Dodano
