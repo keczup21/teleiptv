@@ -1145,8 +1145,10 @@ button.has-icon .icon-label { min-width: 0; }
 button .icon { width: 22px; height: 22px; flex: none; }
 body.uimode-tv button .icon { width: 26px; height: 26px; }
 
-/* przyciski nagłówka: „EPG” i „Ustawienia” mają ikonę i napis (na telewizorze
-   sam obrazek bywa nieczytelny z kanapy), a odświeżanie zostaje samą ikoną */
+/* przyciski z napisem (razem z ikoną albo samym tekstem) trzymają jeden
+   rozmiar i padding: „EPG” i „Ustawienia” w nagłówku oraz „Na żywo” i „Wstecz”
+   nad listą programów. Bez wspólnej klasy „Wstecz” miał domyślny napis, więc
+   na telewizorze był mniejszy niż „Na żywo”. */
 .labeled-button { padding: 13px 20px; }
 body.uimode-tv .labeled-button { padding: 15px 24px; font-size: 21px; }
 

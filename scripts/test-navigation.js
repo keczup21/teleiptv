@@ -840,6 +840,13 @@ check("program, ktory dopiero bedzie, widac, ale nie da sie go wybrac",
 check("„Na zywo” nad lista wraca do biezacej chwili",
   html.indexOf('id="archiveLive"') > 0 && src.indexOf("function playArchiveLive()") > 0 &&
   src.indexOf("if (archiveLive) archiveLive.onclick = playArchiveLive;") > 0);
+/* „Wstecz” obok „Na żywo” musi mieć ten sam napis — obie niosą klasę
+   .labeled-button, bo bez niej „Wstecz” zostawał przy domyślnym rozmiarze
+   i na telewizorze był mniejszy niż „Na żywo”. */
+check("„Wstecz” nad lista programow ma ten sam napis co „Na zywo”",
+  /id="archiveLive"[^>]*class="labeled-button"/.test(html) &&
+  /id="archiveClose"[^>]*class="labeled-button"/.test(html) &&
+  css.indexOf("body.uimode-tv .labeled-button { padding: 15px 24px; font-size: 21px; }") > 0);
 check("lista otwarta z odtwarzacza wraca potem do listy kanalow",
   src.indexOf('playChannel(channel, program, fromPlayer ? "browserScreen" : "archiveScreen");') > 0);
 /* „Na żywo” z listy otwartej w odtwarzaczu też wraca do listy kanałów. Wcześniej

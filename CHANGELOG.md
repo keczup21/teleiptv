@@ -25,6 +25,11 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.24] — 2026-10-07
+
+### Poprawiono
+- **„Wstecz” na liście programów w odtwarzaczu ma ten sam rozmiar co „Na żywo”** — przycisk „Wstecz” zostawał przy domyślnym napisie i na telewizorze był mniejszy niż stojące obok „Na żywo”, więc oba przyciski mają teraz wspólną wielkość i krój.
+
 ## [2.1.23] — 2026-10-07
 
 ### Zmieniono
