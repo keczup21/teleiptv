@@ -25,6 +25,11 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.22] — 2026-10-07
+
+### Poprawiono
+- **Program TV i lista programów odświeżają się same po wczytaniu EPG** — ekran otwarty, zanim EPG zdążyło się sparsować, wypełnia się programami od razu po zakończeniu pobierania w tle (wcześniej zostawał pusty i trzeba było wyjść i wejść ponownie, żeby zobaczyć programy).
+
 ## [2.1.21] — 2026-10-07
 
 ### Zmieniono

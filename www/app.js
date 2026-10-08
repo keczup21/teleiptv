@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.21";
+  var APP_VERSION = "2.1.22";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -2837,6 +2837,10 @@
         if (state.channels.length) {
           selectGroup(state.selectedGroup, document.querySelector(".category.active"));
         }
+        /* Ekran otwarty PRZED końcem parsowania (Program TV albo lista programów
+           kanału) był pusty i nie odświeżał się sam — trzeba było wyjść i wejść
+           ponownie, żeby zobaczyć programy. Dosuwamy EPG tam, gdzie jest widoczne. */
+        refreshOpenEpgViews();
         setStatus(state.channels.length + " " + t("channels_count") + " • EPG: " + count + " " + t("epg_programs"));
       });
     }, function (error) {
@@ -2849,6 +2853,29 @@
       setStatus(state.channels.length + " " + t("channels_count") + " • EPG: " + t("epg_no_data") +
         " (" + (error && error.message ? error.message : error) + ")");
     });
+  }
+
+  /* Programy doszły (albo się zmieniły) po tym, jak użytkownik zdążył otworzyć
+     Program TV albo listę programów kanału. Rysujemy ten widok od nowa, żeby
+     programy pojawiły się bez wychodzenia i wracania. Woła to
+     loadEpgInBackground po zakończeniu parsowania (patrz refreshEpg). */
+  function refreshOpenEpgViews() {
+    var guideScreen = $("guideScreen");
+    if (guideScreen && !guideScreen.classList.contains("hidden")) {
+      /* Program TV: zachowujemy okno czasu i pozycję (guide.windowStart/anchor),
+         więc wystarczy przerysować siatkę i wrócić na program, który leci teraz */
+      renderGuide();
+      focusGuideWatched();
+      updateGuideNowLine();
+      return;
+    }
+    var archiveScreen = $("archiveScreen");
+    if (archiveScreen && !archiveScreen.classList.contains("hidden") && archive.channel) {
+      /* lista programów kanału: otwieramy ją ponownie tym samym wejściem, którym
+         przyszła (z listy albo z paska „EPG” w odtwarzaczu) — openArchive robi
+         od nowa nagłówek, pozycje i fokus na programie bieżącym */
+      openArchive(archive.channel, { fromPlayer: archive.fromPlayer });
+    }
   }
 
   /* EPG ruszamy dopiero wtedy, gdy lista kanałów jest już narysowana, pilot ma

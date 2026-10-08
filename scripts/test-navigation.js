@@ -1127,6 +1127,17 @@ check("EPG z kanalu staje na tym, co leci teraz, i nie gubi fokusu",
   src.indexOf('if (inPlayer) openGuide({ channel: target, returnTo: "playerScreen" });') > 0 &&
   src.indexOf("else openGuide({ channel: target });") > 0);
 
+/* Ekran otwarty PRZED końcem parsowania EPG sam się odświeża, gdy programy
+   dojdą: wcześniej Program TV i lista programów kanału zostawały puste i EPG
+   pojawiało się dopiero po wyjściu i ponownym wejściu. loadEpgInBackground
+   woła refreshOpenEpgViews, które przerysowuje widoczny ekran. */
+check("EPG dosyla sie do otwartego ekranu po zakonczeniu parsowania",
+  src.indexOf("function refreshOpenEpgViews()") > 0 &&
+  src.indexOf("refreshOpenEpgViews();\n        setStatus") > 0 &&
+  src.indexOf('if (guideScreen && !guideScreen.classList.contains("hidden")) {') > 0 &&
+  src.indexOf("renderGuide();\n      focusGuideWatched();\n      updateGuideNowLine();") > 0 &&
+  src.indexOf("openArchive(archive.channel, { fromPlayer: archive.fromPlayer });") > 0);
+
 /* ◀ ▶ chodzą po programach tego samego kanału — także po tych, które dopiero
    będą (nie da się ich włączyć, ale pilot staje na nich i czyta, co będzie).
    Oś czasu dosuwa się dopiero wtedy, gdy podświetlonego programu nie widać
