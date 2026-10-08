@@ -738,6 +738,13 @@ check("pasek postepu programu na kafelku ma tor i podpis",
   css.indexOf(".channel-progress-row") > 0 &&
   css.indexOf(".channel-progress-track") > 0);
 
+/* Pasek postępu dotyczy programu, który leci teraz, więc stoi w kafelku zaraz
+   pod jego wierszem, a przed wierszem „Następnie…”. Był dokładany na końcu
+   i wyglądał, jakby opisywał następną audycję. */
+check("pasek postepu stoi miedzy biezacym programem a wierszem nastepnym",
+  src.indexOf("main.appendChild(nowRow)") < src.indexOf("main.appendChild(progRow)") &&
+  src.indexOf("main.appendChild(progRow)") < src.indexOf("main.appendChild(nextRow)"));
+
 /* --- 15. zakładki ustawień (Ogólne / Aktualizacja / Instrukcja) ----------
    Ustawienia rosły w jedną długą kartę, w której instrukcja pilota stała
    pomiędzy polami formularza. Teraz są trzy zakładki: „Ogólne” (sama

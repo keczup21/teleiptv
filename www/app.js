@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.24";
+  var APP_VERSION = "2.1.25";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -3409,18 +3409,13 @@
       : t("no_epg");
     main.appendChild(nowRow);
 
-    if (next) {
-      var nextRow = document.createElement("small");
-      nextRow.className = "channel-next";
-      nextRow.textContent = t("next") + " " + pad2(new Date(next.start).getHours()) + ":" + pad2(new Date(next.start).getMinutes()) + "  " + next.title;
-      main.appendChild(nextRow);
-    }
-
     if (now) {
       /* Postęp bieżącego programu: tor + kolorowe wypełnienie + podpis
-         „jeszcze X min”. Wcześniej był to sam kolorowy pasek bez tła i bez
-         opisu — nie było widać, że pokazuje, ile już minęło z programu
-         (patrz .channel-progress-row w styles.css). */
+         „jeszcze X min”. Pasek stoi w kafelku zaraz pod wierszem bieżącego
+         programu, a PRZED wierszem „Następnie…” — bo mierzy właśnie ten
+         program. Wcześniej był dokładany na końcu (po „Następnie…”), więc
+         wyglądał, jakby dotyczył następnej audycji (patrz .channel-progress-row
+         w styles.css). */
       var progRow = document.createElement("span");
       progRow.className = "channel-progress-row";
 
@@ -3440,6 +3435,13 @@
       progRow.appendChild(timeLeft);
 
       main.appendChild(progRow);
+    }
+
+    if (next) {
+      var nextRow = document.createElement("small");
+      nextRow.className = "channel-next";
+      nextRow.textContent = t("next") + " " + pad2(new Date(next.start).getHours()) + ":" + pad2(new Date(next.start).getMinutes()) + "  " + next.title;
+      main.appendChild(nextRow);
     }
 
     main.onclick = function () {
