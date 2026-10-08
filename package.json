@@ -1,6 +1,6 @@
 {
   "name": "teleiptv",
-  "version": "2.1.27",
+  "version": "3.0.0",
   "private": true,
   "description": "TeleIPTV dla Android TV / Google TV / Fire TV (.apk) - odtwarzacz IPTV na dekodery.",
   "engines": {
