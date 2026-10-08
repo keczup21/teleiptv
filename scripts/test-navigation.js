@@ -974,14 +974,21 @@ check("pasek odtwarzacza odswieza wpis razem z reszta wskazan",
   src.indexOf("updateOsdProgress();\n    refreshSeekNotice();") > 0);
 
 /* --- 20a. czas pozostały po prawej stronie paska (hh:mm) -------------------
-   Pasek odtwarzacza dopisuje, ile pozostało do końca programu albo nagrania.
-   Ma siedzieć po prawej stronie samego paska i liczyć się razem z jego
-   odświeżaniem (patrz formatRemaining / setOsdRemain w app.js). */
-check("pasek pokazuje po prawej stronie ile zostało do końca",
+   Pasek odtwarzacza dopisuje, ile pozostało do końca programu albo nagrania —
+   z podpisem „do końca”, bo samo hh:mm czytało się niejasno. Ma siedzieć po
+   prawej stronie samego paska i liczyć się razem z jego odświeżaniem, a sposób
+   odtwarzania („odtwarzacz VLC”) opowiada panel diagnostyki (patrz
+   formatRemaining / setOsdRemain w app.js). */
+check("pasek pokazuje po prawej stronie ile zostało do końca, z podpisem",
   html.indexOf('id="playerRemain"') > 0 && html.indexOf('class="player-remain"') > 0 &&
   css.indexOf(".osd-progress {") > 0 && css.indexOf(".player-remain {") > 0 &&
   src.indexOf("function formatRemaining(seconds)") > 0 &&
-  src.indexOf("function setOsdRemain(seconds)") > 0);
+  src.indexOf("function setOsdRemain(seconds)") > 0 &&
+  src.indexOf('t("osd_until") + " " + formatRemaining(seconds)') > 0 &&
+  src.indexOf('osd_until: "do końca"') > 0 && src.indexOf('osd_until: "left"') > 0);
+check("sposob odtwarzania zdjety z paska, a pokazuje go diagnostyka",
+  src.indexOf("timeEl.textContent = engineLabel(state.engine)") < 0 &&
+  src.indexOf('t("diag_engine")') > 0);
 check("czas pozostały liczy sie na zywo, w archiwum i przez silnik odbiornika",
   src.indexOf("setOsdRemain(total - at / 1000);") > 0 &&
   src.indexOf("setOsdRemain(windowSeconds - where);") > 0 &&

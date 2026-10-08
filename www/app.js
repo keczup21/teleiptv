@@ -466,6 +466,7 @@
     osd_diag: "ⓘ Diagnostyka",
     osd_unmute: "🔊 Dźwięk",
     osd_muted: "WYCISZONE",
+    osd_until: "do końca",
     ctx_menu: "Kanał",
     ctx_play: "⏵ Oglądaj",
     ctx_fav_add: "☆ Dodaj do ulubionych",
@@ -781,6 +782,7 @@
     osd_diag: "ⓘ Diagnostics",
     osd_unmute: "🔊 Sound",
     osd_muted: "MUTED",
+    osd_until: "left",
     ctx_menu: "Channel",
     ctx_play: "⏵ Watch",
     ctx_fav_add: "☆ Add to favourites",
@@ -7180,12 +7182,12 @@
       (rest < 10 ? "0" : "") + rest;
   }
 
-  /* Ile zostało do końca w formacie hh:mm — pasek odtwarzacza pokazuje to po
-     prawej stronie (patrz #playerRemain). Zaokrąglamy do pełnej minuty i dajemy
-     minus, bo to czas, który dopiero upłynie. */
+  /* Ile zostało do końca w formacie hh:mm. Pasek odtwarzacza pokazuje to po
+     prawej stronie (patrz #playerRemain) razem z podpisem „do końca” — samo
+     hh:mm bez podpisu czytało się niejasno. Zaokrąglamy do pełnej minuty. */
   function formatRemaining(seconds) {
     var whole = Math.max(0, Math.round(seconds / 60));
-    return "-" + pad2(Math.floor(whole / 60)) + ":" + pad2(whole % 60);
+    return pad2(Math.floor(whole / 60)) + ":" + pad2(whole % 60);
   }
 
   /* -------------------------  PRZEWIJANIE EKRANU  --------------------------
@@ -8748,9 +8750,13 @@
           : "";
       }
       if (timeEl) {
-        timeEl.textContent = engineLabel(state.engine) +
-          (video && video.paused && !nativeLayerActive() ? " • " + t("osd_paused") : "") +
-          (isMuted() ? " • " + t("osd_muted") : "");
+        /* Sposób odtwarzania (np. „odtwarzacz VLC”) zdjęty z paska — opowiada o
+           nim panel diagnostyki (wiersz „sposób odtwarzania”). Zostają tu tylko
+           stany widoczne na obrazie: pauza i wyciszenie. */
+        var osdFlags = [];
+        if (video && video.paused && !nativeLayerActive()) osdFlags.push(t("osd_paused"));
+        if (isMuted()) osdFlags.push(t("osd_muted"));
+        timeEl.textContent = osdFlags.join(" • ");
       }
       if (hintEl) hintEl.textContent = t("osd_hint_live");
     }
@@ -8778,7 +8784,7 @@
       el.classList.add("hidden");
       return;
     }
-    el.textContent = formatRemaining(seconds);
+    el.textContent = t("osd_until") + " " + formatRemaining(seconds);
     el.classList.remove("hidden");
   }
 
