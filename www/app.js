@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "2.1.22";
+  var APP_VERSION = "2.1.23";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -395,6 +395,7 @@
     loading_epg: "Pobieranie EPG…", parsing_epg: "Parsowanie EPG…",
     channels_count: "kanałów", epg_programs: "programów", epg_no_data: "brak danych",
     no_epg: "Brak informacji EPG", next: "Następnie", error: "Błąd:", hourly_recording: "Nagranie godzinowe",
+    program_left: "jeszcze {m} min", program_ending: "za chwilę koniec",
     archive_title: "Archiwum • ", days_back: " dni wstecz", archive_catchup: "Archiwum / catch-up",
     err_http: "Serwer zwrócił HTTP {code}", err_http_access: "Serwer zwrócił HTTP {code} (brak dostępu).",
     err_network: "Nie można pobrać danych (sieć / CORS).", err_timeout: "Przekroczono czas połączenia.",
@@ -709,6 +710,7 @@
     loading_epg: "Loading EPG…", parsing_epg: "Parsing EPG…",
     channels_count: "channels", epg_programs: "programs", epg_no_data: "no data",
     no_epg: "No EPG info", next: "Next", error: "Error:", hourly_recording: "Hourly recording",
+    program_left: "{m} min left", program_ending: "ending soon",
     archive_title: "Archive • ", days_back: " days back", archive_catchup: "Archive / catch-up",
     err_http: "Server returned HTTP {code}", err_http_access: "Server returned HTTP {code} (access denied).",
     err_network: "Cannot fetch data (network / CORS).", err_timeout: "Connection timed out.",
@@ -3415,11 +3417,29 @@
     }
 
     if (now) {
+      /* Postęp bieżącego programu: tor + kolorowe wypełnienie + podpis
+         „jeszcze X min”. Wcześniej był to sam kolorowy pasek bez tła i bez
+         opisu — nie było widać, że pokazuje, ile już minęło z programu
+         (patrz .channel-progress-row w styles.css). */
+      var progRow = document.createElement("span");
+      progRow.className = "channel-progress-row";
+
+      var track = document.createElement("i");
+      track.className = "channel-progress-track";
       var progress = document.createElement("i");
       progress.className = "channel-progress";
       var pct = Math.max(0, Math.min(100, (Date.now() - now.start) / (now.end - now.start) * 100));
       progress.style.width = pct + "%";
-      main.appendChild(progress);
+      track.appendChild(progress);
+      progRow.appendChild(track);
+
+      var timeLeft = document.createElement("small");
+      timeLeft.className = "channel-progress-left";
+      var minutesLeft = Math.max(0, Math.round((now.end - Date.now()) / 60000));
+      timeLeft.textContent = minutesLeft < 1 ? t("program_ending") : t("program_left", { m: minutesLeft });
+      progRow.appendChild(timeLeft);
+
+      main.appendChild(progRow);
     }
 
     main.onclick = function () {

@@ -727,6 +727,17 @@ check("nazwy kanalow przykrywaja linie przy przewijaniu osi czasu",
 check("fokus kafelka kanalu to jedna obwodka wokol calego wiersza",
   css.indexOf("body.uimode-tv .channel .channel-main:focus") > 0);
 
+/* Pasek postępu programu na liście kanałów: tor + podpis „jeszcze X min”, żeby
+   było widać, że to postęp bieżącego programu, a nie sama kolorowa kreska. */
+check("pasek postepu programu na kafelku ma tor i podpis",
+  src.indexOf('progRow.className = "channel-progress-row"') > 0 &&
+  src.indexOf('track.className = "channel-progress-track"') > 0 &&
+  src.indexOf('timeLeft.className = "channel-progress-left"') > 0 &&
+  src.indexOf('t("program_left", { m: minutesLeft })') > 0 &&
+  src.indexOf('t("program_ending")') > 0 &&
+  css.indexOf(".channel-progress-row") > 0 &&
+  css.indexOf(".channel-progress-track") > 0);
+
 /* --- 15. zakładki ustawień (Ogólne / Aktualizacja / Instrukcja) ----------
    Ustawienia rosły w jedną długą kartę, w której instrukcja pilota stała
    pomiędzy polami formularza. Teraz są trzy zakładki: „Ogólne” (sama

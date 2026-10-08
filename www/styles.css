@@ -292,13 +292,39 @@ aside {
 .channel-now { margin-top: 4px; color: var(--text); font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .channel-next { margin-top: 2px; color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* Pasek postępu bieżącego programu na kafelku kanału: tor (tło) + kolorowe
+   wypełnienie + podpis „jeszcze X min”. Sam kolorowy pasek bez tła i opisu
+   nie mówił, że pokazuje upływ programu. */
+.channel-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.channel-progress-track {
+  flex: 1;
+  display: block;
+  height: 6px;
+  min-width: 0;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
 .channel-progress {
   display: block;
-  height: 3px;
-  margin-top: 6px;
+  height: 100%;
   background: var(--grad);
   border-radius: 999px;
   max-width: 100%;
+}
+
+.channel-progress-left {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 /* Gwiazdka ulubionych na kafelku kanału. Przycisk archiwum („⏪”) zniknął
@@ -861,6 +887,8 @@ body.uimode-tv .channel-logo { width: 76px; height: 76px; }
 body.uimode-tv .channel-name { font-size: 30px; }
 body.uimode-tv .channel-now { font-size: 21px; }
 body.uimode-tv .channel-next { font-size: 19px; }
+body.uimode-tv .channel-progress-track { height: 8px; }
+body.uimode-tv .channel-progress-left { font-size: 16px; }
 body.uimode-tv .category { padding: 19px 22px; font-size: 24px; }
 body.uimode-tv button { padding: 16px 26px; }
 body.uimode-tv .program { padding: 24px 28px; }

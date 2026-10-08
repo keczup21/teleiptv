@@ -25,6 +25,11 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [2.1.23] — 2026-10-07
+
+### Zmieniono
+- **Pasek postępu programu na liście kanałów widać, że to postęp** — przy każdym kanale pasek bieżącego programu ma teraz widoczny tor (tło całego paska) i podpis „jeszcze X min” (a pod koniec programu „za chwilę koniec”), więc od razu wiadomo, że pokazuje upływ bieżącego programu, a nie jest samą kolorową kreską.
+
 ## [2.1.22] — 2026-10-07
 
 ### Poprawiono
