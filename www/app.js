@@ -154,6 +154,14 @@
        (patrz seekAnchorMs) */
     vlcPendingSeek: 0,
     vlcPendingAt: 0,
+    /* chwila ostatniego automatycznego przejścia do następnego programu (patrz
+       rollArchiveAtEnd) — nowe okno ładuje się chwilę, więc przez ten czas nie
+       patrzymy znów na koniec, żeby nie przeskoczyć o program za daleko */
+    rollAt: 0,
+    /* cofnięto na koniec poprzedniego programu (patrz stepToNeighbor): takie
+       okno otwiera się na swoim końcu i nie przeskakuje od razu w przód, żeby
+       „wstecz” biegło dalej w tył, a nie odbijało z powrotem */
+    rewindEnd: false,
     osdTicker: null,
     /* Pasek otwarty klawiszem OK / dotknięciem to menu: ▲ ▼ chodzą wtedy po jego
        przyciskach („Pauza”, „EPG”, …), a nie po kanałach. Pasek pokazany przy
@@ -3995,9 +4003,19 @@
          zdekodował ją później) — dlatego budzik obrazu sprawdzamy też tutaj. */
       notePicture();
       updateOsdProgress();
+      /* program dobiegł końca z EPG — w archiwum przechodzimy do następnego */
+      rollArchiveAtEnd(false);
+    });
+    video.addEventListener("ended", function () {
+      /* materiał oddany przez serwer dobiegł końca — jak wyżej (bez patrzenia na
+         pozycję, bo to sam koniec strumienia) */
+      rollArchiveAtEnd(true);
     });
     video.addEventListener("loadedmetadata", function () {
       noteStreamActivity();
+      /* cofnięty program otwiera się na swoim końcu — znamy już długość okna,
+         więc przeskakujemy przed koniec programu z EPG (patrz stepToNeighbor) */
+      if (state.rewindEnd) seekToProgramEnd();
       /* Metadane mówią, jaka to rozdzielczość — od tego momentu wiemy, czy kanał
          jest 4K. Taki kanał wraca do tego, jak grał, zanim aplikacja zaczęła się
          uczyć silników: bez wymuszonej warstwy obrazu i ze sprzętowym dekoderem
@@ -5764,7 +5782,12 @@
       updateOsd();
       return;
     }
-    if (type === "buffering" || type === "ended") return;
+    if (type === "buffering") return;
+    if (type === "ended") {
+      /* koniec nagrania — idziemy do następnego programu (patrz rollArchiveAtEnd) */
+      rollArchiveAtEnd(true);
+      return;
+    }
     if (type === "error") {
       handlePlaybackError(t("err_stream") + " (" + engineName("exo") +
         (event.message ? ": " + String(event.message).slice(0, 120) : "") + ")");
@@ -5960,6 +5983,16 @@
     if (type === "time") {
       state.vlcTime = Math.max(0, event.time | 0);
       if ((event.length | 0) > 0) state.vlcLength = event.length | 0;
+      /* cofnięty program otwiera się na swoim końcu — pierwszy raz, gdy znamy
+         długość okna, przeskakujemy przed koniec programu z EPG (patrz
+         stepToNeighbor i seekToProgramEnd) */
+      if (state.rewindEnd && state.vlcLength > 0 &&
+          (state.vlcTime | 0) < Math.min(state.vlcLength, archiveProgramSeconds() * 1000) - 2000) {
+        seekToProgramEnd();
+      }
+      /* program dobiegł końca z EPG — automatyczne przejście do następnego
+         (patrz rollArchiveAtEnd) */
+      rollArchiveAtEnd(false);
       return;
     }
     if (type === "size") {
@@ -5998,7 +6031,12 @@
       updateOsd();
       return;
     }
-    if (type === "buffering" || type === "ended" || type === "stopped") return;
+    if (type === "buffering" || type === "stopped") return;
+    if (type === "ended") {
+      /* koniec nagrania — idziemy do następnego programu (patrz rollArchiveAtEnd) */
+      rollArchiveAtEnd(true);
+      return;
+    }
     if (type === "error") {
       handlePlaybackError(t("err_stream") + " (" + engineName("vlc") +
         (event.message ? ": " + String(event.message).slice(0, 120) : "") + ")");
@@ -6966,6 +7004,128 @@
     return Math.max(0, (Math.min(program.end, Date.now()) - program.start) / 1000);
   }
 
+  /* Sąsiedni program tego samego kanału w EPG — poprzedni (−1) albo następny
+     (+1) względem oglądanego programu (state.watchProgram). Bierzemy tylko te,
+     które już się zaczęły (start <= teraz), bo materiał, który dopiero będzie,
+     nie ma catch-upu — dzięki temu „następny” trafia też w program lecący teraz
+     (zwykle to on idzie po zakończonym nagraniu). Zwraca null, gdy w tę stronę
+     nie ma już nic (początek/koniec archiwum dostawcy). */
+  function neighborProgram(direction) {
+    var channel = state.watchChannel;
+    var current = state.watchProgram;
+    if (!channel || !current) return null;
+
+    var now = Date.now();
+    var list = programsFor(channel).filter(function (program) {
+      return program.end > program.start && program.start <= now;
+    });
+    list.sort(function (a, b) { return a.start - b.start; });
+    if (!list.length) return null;
+
+    /* programy liczymy po czasie startu, więc oglądany program (i jego sąsiad)
+       znajdują się jednoznacznie nawet przy zdublowanych godzinach */
+    var index = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].start <= current.start) index = i;
+      else break;
+    }
+    return list[index + direction] || null;
+  }
+
+  /* Przejście na sąsiedni program z EPG: zwraca true, gdy było na co przejść.
+     Używa tego przewijanie na granicy okna (seekBy, seekArchiveHardware) oraz
+     przyciski „Poprzedni / Następny” w pasku (watchProgramStep). */
+  function stepToNeighbor(direction) {
+    var target = neighborProgram(direction);
+    if (!target) return false;
+    playChannel(state.watchChannel, target, "playerScreen");
+    if (direction < 0) {
+      /* „wstecz”: poprzedni program otwiera się na swoim końcu, a nie od
+         początku — dzięki temu cofanie biegnie dalej w tył, a obraz nie
+         przeskakuje zaraz z powrotem w przód (patrz seekToProgramEnd
+         i rollArchiveAtEnd) */
+      state.rollAt = Date.now();
+      state.rewindEnd = true;
+    } else {
+      state.rewindEnd = false;
+    }
+    return true;
+  }
+
+  /* Otwarcie cofniętego programu na jego końcu: nowe okno ładuje się od zera,
+     więc gdy tylko znamy jego długość, przeskakujemy na chwilę przed koniec
+     programu z EPG. Dzięki temu „poprzedni” ląduje tam, gdzie program się
+     kończy — i od tego miejsca ⏪ cofa dalej w tył. Wywołują to zdarzenie
+     metadanych <video> (loadedmetadata) i zegar silnika VLC (vlcEvent), gdy
+     staną się znane pozycja i długość okna. */
+  function seekToProgramEnd() {
+    var programSeconds = archiveProgramSeconds();
+    if (programSeconds <= 0) return false;
+    if (nativeLayerActive()) {
+      if (state.vlcLength <= 0) return false;
+      var limitMs = Math.min(state.vlcLength, programSeconds * 1000);
+      var target = Math.max(0, limitMs - 1000);
+      if (!vlcSeek(target)) return false;
+      /* silnik donosi jeszcze starą pozycję — zapamiętujemy cel skoku */
+      state.vlcPendingSeek = target;
+      state.vlcPendingAt = Date.now();
+      updateOsdProgress();
+      return true;
+    }
+    var video = $("video");
+    if (!video || !isFinite(video.duration) || video.duration <= 0) return false;
+    video.currentTime = Math.max(0, Math.min(video.duration, programSeconds) - 1);
+    return true;
+  }
+
+  /* Czy odtwarzane okno archiwum dobiegło końca? Pytają o to przewijanie na
+     granicy (seekBy) i automatyczne przejście (rollArchiveAtEnd). Pozycję i
+     długość bierze się z elementu <video> albo z zegara silnika (patrz vlcEvent).
+     Okno przycinamy do granicy programu z EPG (patrz archiveProgramSeconds). */
+  function archiveAtProgramEnd() {
+    if (!state.isArchive || atLiveEdge()) return false;
+    var programSeconds = archiveProgramSeconds();
+    if (programSeconds <= 0) return false;
+    if (nativeLayerActive()) {
+      if (state.vlcLength <= 0) return false;
+      var limitMs = Math.min(state.vlcLength, programSeconds * 1000);
+      return (state.vlcTime | 0) >= limitMs - 500;
+    }
+    var video = $("video");
+    if (!video || !isFinite(video.duration) || video.duration <= 0) return false;
+    var limit = Math.min(video.duration, programSeconds);
+    return video.currentTime >= limit - 0.5;
+  }
+
+  /* Ile czekamy po przejściu, zanim znów patrzymy na koniec programu — nowe okno
+     ładuje się chwilę i przez ten czas silnik donosi jeszcze starą pozycję; bez
+     tej zwłoki przejście wskoczyłoby o dwa programy dalej naraz. */
+  var ROLL_SETTLE = 4000;
+
+  /* Automatyczne przejście do następnego programu z EPG, gdy odtwarzany program
+     dobiegł końca — „płynnie”, bez czekania, aż użytkownik naciśnie ⏩. `force`
+     (koniec strumienia zgłoszony przez silnik) przechodzi od razu, bez patrzenia
+     na pozycję. Gdy w tę stronę nie ma już programu (koniec archiwum), nic się
+     nie dzieje — obraz zostaje tak, jak jest. */
+  function rollArchiveAtEnd(force) {
+    if (!state.isArchive || atLiveEdge()) return false;
+    if (Date.now() - state.rollAt < ROLL_SETTLE) return false;
+    if (state.rewindEnd) {
+      /* obraz cofnięto na koniec poprzedniego programu (patrz stepToNeighbor):
+         nie przeskakujemy w przód, póki obraz siedzi na końcu — inaczej ⏪
+         odbiłoby zaraz z powrotem do programu, z którego przyszliśmy. Gdy obraz
+         ruszy z końca, znacznik gaśnie i zwykłe przejście działa dalej. */
+      if (!archiveAtProgramEnd()) state.rewindEnd = false;
+      return false;
+    }
+    if (!force && !archiveAtProgramEnd()) return false;
+    var target = neighborProgram(1);
+    if (!target) return false;
+    state.rollAt = Date.now();
+    playChannel(state.watchChannel, target, "playerScreen");
+    return true;
+  }
+
   /* Przewijanie pilota (⏪/⏩): po nagraniu skaczemy o krok z ustawień, a gdy
      w oknie kończącym się na „teraz” nie ma już czego przewijać — ⏩ wraca na
      żywo, a ⏪ wczytuje dłuższe okno catch-up. Na samym kanale na żywo ⏪
@@ -7018,13 +7178,37 @@
       return;
     }
 
-    /* Krok kończy się na granicy programu, a nie na końcu nagrania oddanego przez
-       serwer (patrz archiveProgramSeconds): ⏩ na końcu programu nie wchodzi
-       w materiał, którego użytkownik nie wybrał — od tego jest „następny program”. */
+    /* Okno przycinamy do granicy programu z EPG, a nie do końca nagrania oddanego
+       przez serwer (patrz archiveProgramSeconds) — dzięki temu pasek i licznik
+       opisują program, który użytkownik naprawdę wybrał. */
     var windowSeconds = archiveProgramSeconds();
     var limit = windowSeconds > 0 ? Math.min(video.duration, windowSeconds) : video.duration;
+
+    /* ⏩ to ruch w przód: cofnięcie na koniec poprzedniego programu przestaje
+       obowiązywać, więc automatyczne przejście znowu działa (patrz stepToNeighbor
+       i rollArchiveAtEnd) */
+    if (direction > 0) state.rewindEnd = false;
+
+    /* Koniec programu z EPG (materiał odtworzony do końca, a okno nie kończy się
+       na „teraz”): ⏩ idzie do następnego programu z EPG, a ⏪ na początku do
+       poprzedniego — tak jak „następny / poprzedni” w odtwarzaczu. Bez tego
+       przewijanie na granicy programu było martwym punktem, gdy materiał oddany
+       przez serwer okazywał się dłuższy niż program z EPG (zgłoszony błąd). */
+    if (!atLiveEdge()) {
+      if (direction > 0 && video.currentTime >= limit - 0.5 && stepToNeighbor(1)) return;
+      if (direction < 0 && video.currentTime <= 0.5 && stepToNeighbor(-1)) return;
+    }
+
     var before = video.currentTime;
+    /* obraz cofnięty na koniec poprzedniego programu mógł już dobiec końca
+       (zatrzymany na ostatniej klatce) — skok ma go znowu puścić, żeby cofanie
+       było widać, a nie zostawiało zamrożonej klatki (patrz stepToNeighbor) */
+    var wasEnded = video.ended === true;
     video.currentTime = Math.max(0, Math.min(limit, before + direction * step));
+    if (wasEnded) {
+      var resume = video.play();
+      if (resume && resume.catch) resume.catch(function () {});
+    }
     $("playerProgress").style.width = (Math.min(video.currentTime, limit) / limit) * 100 + "%";
     $("playerTime").textContent = formatTime(video.currentTime) + " / " + formatTime(limit);
     /* ile obrazu naprawdę przybyło: na krawędzi nagrania skok bywa mniejszy od
@@ -7096,6 +7280,18 @@
        (patrz archiveProgramSeconds) */
     var programSeconds = archiveProgramSeconds();
     var limitMs = programSeconds > 0 ? Math.min(state.vlcLength, programSeconds * 1000) : state.vlcLength;
+
+    /* ⏩ to ruch w przód: cofnięcie na koniec poprzedniego programu przestaje
+       obowiązywać (patrz seekBy i stepToNeighbor) */
+    if (direction > 0) state.rewindEnd = false;
+
+    /* Koniec programu z EPG: ⏩ następny program, a ⏪ na początku poprzedni
+       (patrz seekBy) — zamiast zatrzymywać się na granicy oddanego materiału */
+    if (!atLiveEdge()) {
+      if (direction > 0 && at >= limitMs - 500 && stepToNeighbor(1)) return;
+      if (direction < 0 && at <= 500 && stepToNeighbor(-1)) return;
+    }
+
     var target = Math.max(0, Math.min(limitMs, at + direction * stepMs));
     if (!vlcSeek(target)) {
       /* most milczy (np. most zniknął w trakcie) — zostaje pasek z informacją */
@@ -8677,27 +8873,13 @@
     playChannel(state.watchChannel, null, "playerScreen");
   }
 
-  /* ◀/▶ na pasku archiwum: poprzednie / następne nagranie tego samego kanału */
+  /* ◀/▶ na pasku archiwum: poprzednie / następne nagranie tego samego kanału.
+     Sąsiada wybiera neighborProgram (patrz tam) — ten sam, którego używa
+     przewijanie na granicy okna. Dzięki temu „następny” trafia też w program
+     lecący teraz, gdy po zakończonym nagraniu nic już nie zostało. */
   function watchProgramStep(direction) {
-    var channel = state.watchChannel;
-    var current = state.watchProgram;
-    if (!channel || !current) return;
-
-    var now = Date.now();
-    var playable = programsFor(channel).filter(function (program) {
-      return program.end > program.start && program.end <= now;
-    });
-    playable.sort(function (a, b) { return a.start - b.start; });
-    if (!playable.length) return;
-
-    var index = -1;
-    for (var i = 0; i < playable.length; i++) {
-      if (playable[i].start <= current.start) index = i;
-      else break;
-    }
-    var target = playable[index + direction];
-    if (!target) return;
-    playChannel(channel, target, "playerScreen");
+    if (!state.watchChannel) return;
+    stepToNeighbor(direction);
   }
 
   /* ---------------------  TREŚĆ PASKA: MINI-EPG KANAŁU  --------------------- */

@@ -3493,7 +3493,10 @@ function exoHarness(o) {
     scheduleOsdHide: function () {},
     clearStartWatchdog: function () { sandbox.state.startTimer = null; },
     setTimeout: function (fn) { calls.timers.push(fn); return calls.timers.length; },
-    clearTimeout: function () {}
+    clearTimeout: function () {},
+    /* automatyczne przejscie na koniec programu (patrz rollArchiveAtEnd w app.js):
+       w tym teście zdarzenia silnika nie niosą oglądanego programu, więc atrapa */
+    rollArchiveAtEnd: function () { return false; }
   };
   /* window to ten sam obiekt co zbiór zmiennych globalnych: tak działa i most, i
      zdarzenie window.__openiptvNativeEvent, które app.js na nim zapisuje */
@@ -3705,7 +3708,10 @@ function vlcHarness(o) {
     clearVideoQuietly: function () {
       calls.videoPaused = true;
       calls.videoCleared = true;
-    }
+    },
+    /* automatyczne przejscie na koniec programu (patrz rollArchiveAtEnd w app.js):
+       w tym teście zdarzenia silnika nie niosą oglądanego programu, więc atrapa */
+    rollArchiveAtEnd: function () { return false; }
   };
   sandbox.window = sandbox;
   run(vlcCode, sandbox);

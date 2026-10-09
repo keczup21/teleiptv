@@ -87,7 +87,11 @@ function harness(o) {
       /* zegar obrazu silnika (VLC): takie nagranie nie ma elementu <video>, więc
          pozycję i długość okna niesie most (patrz vlcEvent w app.js) */
       vlcTime: o.vlcTime | 0,
-      vlcLength: o.vlcLength | 0
+      vlcLength: o.vlcLength | 0,
+      /* chwila ostatniego automatycznego przejscia (patrz rollArchiveAtEnd) */
+      rollAt: o.rollAt || 0,
+      /* cofniecie na koniec poprzedniego programu (patrz stepToNeighbor) */
+      rewindEnd: !!o.rewindEnd
     },
     settings: { seekSeconds: o.seekSeconds === undefined ? 10 : o.seekSeconds },
     $: function (id) {
@@ -101,6 +105,10 @@ function harness(o) {
     scheduleOsdHide: function () { calls.osdHide++; },
     hasArchive: function () { return o.hasArchive !== false; },
     currentProgram: function () { return o.epg || null; },
+    /* lista programów kanału (patrz programsFor w app.js): potrzebna przy
+       przejściu na sąsiedni program na granicy okna (neighborProgram) */
+    programsFor: function () { return o.programs || []; },
+
     /* Silnik odbiornika (VLC albo odtwarzacz systemowy — patrz nativeLayerActive):
        w atrapie włącza go opcja „vlc” / „exo”. Jego obrazu nie ma w elemencie
        <video>, więc skok o krok w nagraniu idzie jego zegarem (patrz
@@ -752,6 +760,196 @@ h.api.seekBy(-1);
 check("nagranie VLC: ⏪ w srodku programu idzie krokiem jak dotad",
   h.calls.seek.length === 1 && h.calls.seek[0] === 990000,
   JSON.stringify(h.calls.seek));
+
+/* --- 5a. granica programu z EPG: ⏩ nastepny / ⏪ poprzedni (zgloszony blad) -
+   Material oddany przez serwer bywa dluzszy od programu z EPG. Na koncu takiego
+   programu ⏩ ma przejsc do nastepnego programu z EPG, a ⏪ na poczatku do
+   poprzedniego — zamiast zatrzymac sie w martwym punkcie (patrz neighborProgram
+   i stepToNeighbor w app.js). Program lecacy teraz tez jest osiagnalny, bo ma
+   juz catch-up (start <= teraz). */
+const PROGS = [
+  { start: NOW - 10800000, end: NOW - 7200000, title: "Najstarszy" },
+  { start: NOW - 7200000, end: NOW - 3600000, title: "Stary" },
+  { start: NOW - 3600000, end: NOW - 1800000, title: "Sredni" },
+  { start: NOW - 1800000, end: NOW + 1800000, title: "Teraz" }
+];
+
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 3600,
+  program: PROGS[1], programs: PROGS
+});
+h.api.seekBy(1);
+check("koniec programu z EPG: ⏩ przechodzi do nastepnego programu",
+  h.calls.play.length === 1 && h.calls.play[0].program === PROGS[2] &&
+  h.calls.play[0].screen === "playerScreen" && h.calls.goLive === 0,
+  JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 0,
+  program: PROGS[1], programs: PROGS
+});
+h.api.seekBy(-1);
+check("poczatek programu z EPG: ⏪ przechodzi do poprzedniego programu",
+  h.calls.play.length === 1 && h.calls.play[0].program === PROGS[0],
+  JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 3590,
+  program: PROGS[1], programs: PROGS
+});
+h.api.seekBy(1);
+check("srodek programu: ⏩ dalej idzie krokiem, bez zmiany programu",
+  h.video.currentTime === 3600 && h.calls.play.length === 0 && h.calls.goLive === 0,
+  "currentTime=" + h.video.currentTime);
+
+h = harness({
+  isArchive: true, duration: 1800, currentTime: 1800,
+  program: PROGS[2], programs: PROGS
+});
+h.api.seekBy(1);
+check("koniec ostatniego zakonczonego programu: ⏩ wchodzi w program lecacy teraz",
+  h.calls.play.length === 1 && h.calls.play[0].program === PROGS[3],
+  JSON.stringify(h.calls.play));
+
+/* brak sasiada w EPG (koniec archiwum): skok zostaje na miejscu, ale bez ciszy */
+const OLD = [
+  { start: NOW - 10800000, end: NOW - 7200000, title: "Najstarszy" },
+  { start: NOW - 7200000, end: NOW - 3600000, title: "Stary" }
+];
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 3600,
+  program: OLD[1], programs: OLD
+});
+h.api.seekBy(1);
+check("koniec archiwum (brak nastepnego w EPG): ⏩ zostaje na miejscu",
+  h.calls.play.length === 0 && h.calls.goLive === 0 && h.video.currentTime === 3600,
+  "currentTime=" + h.video.currentTime);
+
+h = harness({
+  isArchive: true, vlc: true, vlcLength: 3600000, vlcTime: 3600000,
+  program: PROGS[1], programs: PROGS
+});
+h.api.seekBy(1);
+check("nagranie VLC: ⏩ na granicy programu idzie do nastepnego programu z EPG",
+  h.calls.play.length === 1 && h.calls.play[0].program === PROGS[2] && h.calls.seek.length === 0,
+  JSON.stringify(h.calls));
+
+
+/* --- 5b. automatyczne przejscie po koncu programu (bez naciskania ⏩) --------
+   Program z EPG skonczyl sie w trakcie ogladania — ma plynnie przejsc do
+   nastepnego programu, bez czekania na pilota (patrz rollArchiveAtEnd i jego
+   wywolania w timeupdate / vlcEvent). Chwila po przejsciu nowe okno sie laduje,
+   wiec nie wolno przeskoczyc drugi raz pod rzad. */
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 3600,
+  program: PROGS[1], programs: PROGS
+});
+h.api.rollArchiveAtEnd(false);
+check("koniec programu: automatyczne przejscie do nastepnego programu",
+  h.calls.play.length === 1 && h.calls.play[0].program === PROGS[2],
+  JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 1800,
+  program: PROGS[1], programs: PROGS
+});
+h.api.rollArchiveAtEnd(false);
+check("srodek programu: bez automatycznego przejscia",
+  h.calls.play.length === 0, JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 3600, rollAt: NOW,
+  program: PROGS[1], programs: PROGS
+});
+h.api.rollArchiveAtEnd(false);
+check("chwila po przejsciu: nie przeskakujemy drugi raz (nowe okno sie laduje)",
+  h.calls.play.length === 0, JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 1800, currentTime: 1800,
+  program: PROGS[2], programs: PROGS
+});
+h.api.rollArchiveAtEnd(true);
+check("koniec strumienia (ended): przejscie bez patrzenia na pozycje",
+  h.calls.play.length === 1 && h.calls.play[0].program === PROGS[3],
+  JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 3600,
+  program: PROGS[3], programs: PROGS
+});
+h.api.rollArchiveAtEnd(true);
+check("program lecacy teraz: bez automatycznego przejscia (na zywo rzadzi ⏩)",
+  h.calls.play.length === 0, JSON.stringify(h.calls.play));
+
+
+/* --- 5c. „poprzedni” otwiera sie na swoim koncu (ciagle cofanie w czasie) ----
+   ⏪ na poczatku programu laduje poprzedni program i ustawia obraz na jego
+   koncu, a nie od poczatku — od tego miejsca cofanie biegnie dalej w tyl.
+   Zeby obraz nie odbil zaraz w przod, automatyczne przejscie jest chwilowo
+   wstrzymane (znacznik rewindEnd), dopoki obraz nie ruszy z konca. */ 
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 0,
+  program: PROGS[2], programs: PROGS
+});
+h.api.seekBy(-1);
+check("granica: ⏪ laduje poprzedni program i znaczy koniec (ciagle cofanie)",
+  h.calls.play.length === 1 && h.calls.play[0].program === PROGS[1] &&
+  h.api.state.rewindEnd === true && h.api.state.rollAt === NOW,
+  JSON.stringify({ play: h.calls.play[0] && h.calls.play[0].program.title, rewindEnd: h.api.state.rewindEnd }));
+
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 0,
+  program: PROGS[1], programs: PROGS, rewindEnd: true
+});
+h.api.seekToProgramEnd();
+check("cofniety program <video>: skok na chwile przed koniec programu",
+  h.video.currentTime === 3599, "currentTime=" + h.video.currentTime);
+
+h = harness({
+  isArchive: true, vlc: true, vlcLength: 3600000, vlcTime: 0,
+  program: PROGS[1], programs: PROGS, rewindEnd: true
+});
+h.api.seekToProgramEnd();
+check("cofniety program VLC: skok na chwile przed koniec programu",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 3599000,
+  JSON.stringify(h.calls.seek));
+
+h = harness({
+  isArchive: true, vlc: true, vlcLength: 3600000, vlcTime: 3600000, rollAt: NOW - 5000,
+  program: PROGS[1], programs: PROGS, rewindEnd: true
+});
+h.api.rollArchiveAtEnd(true);
+check("cofniety program na koncu: automatyczne przejscie wstrzymane (bez odbicia)",
+  h.calls.play.length === 0 && h.api.state.rewindEnd === true,
+  JSON.stringify({ play: h.calls.play, rewindEnd: h.api.state.rewindEnd }));
+
+h = harness({
+  isArchive: true, vlc: true, vlcLength: 3600000, vlcTime: 1800000, rollAt: NOW - 5000,
+  program: PROGS[1], programs: PROGS, rewindEnd: true
+});
+h.api.rollArchiveAtEnd(false);
+check("cofniety program, obraz ruszyl z konca: znacznik gasnie, bez odbicia",
+  h.api.state.rewindEnd === false && h.calls.play.length === 0,
+  JSON.stringify({ rewindEnd: h.api.state.rewindEnd, play: h.calls.play }));
+
+h = harness({
+  isArchive: true, vlc: true, vlcLength: 3600000, vlcTime: 3600000, rollAt: NOW - 5000,
+  program: PROGS[1], programs: PROGS, rewindEnd: false
+});
+h.api.rollArchiveAtEnd(false);
+check("po wygaszeniu znacznika: koniec programu znowu idzie do nastepnego",
+  h.calls.play.length === 1 && h.calls.play[0].program === PROGS[2],
+  JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 3600, currentTime: 100,
+  program: PROGS[1], programs: PROGS, rewindEnd: true
+});
+h.api.seekBy(1);
+check("⏩ w cofnietym programie: znacznik cofniecia gasnie",
+  h.api.state.rewindEnd === false, "rewindEnd=" + h.api.state.rewindEnd);
+
 
 /* --- 5. czas pozostały na pasku (formatRemaining): zawsze hh:mm, bez minusa -
    Pasek odtwarzacza dopisuje po prawej stronie, ile zostało do końca programu
