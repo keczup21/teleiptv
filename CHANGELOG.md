@@ -25,6 +25,15 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [3.0.1] — 2026-10-07
+
+### Dodano
+- **Przewijanie na granicy programu przechodzi do sąsiedniego programu** — na końcu programu ⏩ idzie do następnego programu z EPG, a na początku ⏪ do poprzedniego, zamiast zatrzymywać się w martwym punkcie, gdy materiał od serwera jest dłuższy niż program z EPG.
+- **Koniec programu przechodzi płynnie do następnego** — gdy oglądany program z EPG dobiega końca, obraz sam idzie do następnego programu, bez czekania, aż użytkownik naciśnie ⏩.
+
+### Poprawiono
+- **„Poprzedni program” otwiera się na swoim końcu** — cofanie ⏪ na początku programu wczytuje poprzedni program na jego końcu, dzięki czemu cofanie biegnie dalej w tył, a obraz nie odbija zaraz z powrotem w przód.
+
 ## [3.0.0] — 2026-10-07
 
 ### Zmieniono
