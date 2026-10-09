@@ -3992,10 +3992,16 @@ check("okno catch-up (timeshift): dlugosc okna bez zmian",
 winBox.state.watchProgram = null;
 check("kanal bez wybranego programu: nie ma czego przycinac",
   winBox.archiveProgramSeconds() === 0, String(winBox.archiveProgramSeconds()));
-check("pasek i kroki ⏪/⏩ koncza sie na granicy programu, nie na koncu okna od serwera",
+/* pasek nagrania tnie sie do biezacego programu (1 h, nie 1:59:59), a krok
+   ⏪/⏩ liczy sie po calym oknie od serwera — okno moze obejmowac nastepny program,
+   wiec obraz plynie w niego plynnie, bez przeladowania strumienia (patrz
+   archiveWindowSeconds i syncWatchSegment) */
+check("pasek nagrania tnie sie do programu, a kroki ⏪/⏩ moga plynnie przejsc w nastepny program z tego samego okna",
   src.indexOf("if (programSeconds > 0) windowSeconds = Math.min(windowSeconds, programSeconds);") > 0 &&
   src.indexOf("var limit = windowSeconds > 0 ? Math.min(video.duration, windowSeconds) : video.duration;") > 0 &&
-  src.indexOf("var limitMs = programSeconds > 0 ? Math.min(state.vlcLength, programSeconds * 1000) : state.vlcLength;") > 0);
+  src.indexOf("var limitMs = windowSeconds > 0 ? Math.min(state.vlcLength, windowSeconds * 1000) : state.vlcLength;") > 0 &&
+  src.indexOf("function archiveWindowSeconds() {") > 0 &&
+  src.indexOf("function syncWatchSegment() {") > 0);
 
 /* przesuniecie godzin EPG (czas zimowy / letni) */
 const shiftStart = src.indexOf("function shiftPrograms(programs, hours)");

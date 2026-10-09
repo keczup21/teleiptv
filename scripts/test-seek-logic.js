@@ -722,9 +722,11 @@ check("nowy obraz gasi komunikat o skoku na srodku obrazu",
 
 /* --- 4. nagranie programu, ktory sie skonczyl: okno to dlugosc programu -----
    Serwer timeshiftu potrafi oddac wiecej, niz zamowilismy (np. 1:59:59 dla
-   programu godzinnego). Krok ⏩ nie moze wtedy wejsc w material z nastepnego
-   programu — zatrzymuje sie na granicy programu (patrz archiveProgramSeconds
-   i updateOsdProgress w app.js). */
+   programu godzinnego). Okno obejmuje wtedy jeszcze nastepny program, wiec obraz
+   po prostu plynie dalej — bez przeladowania strumienia. Krok ⏩ na koncu
+   programu nie zatrzymuje sie wiec na jego granicy, a wchodzi w dalsza czesc
+   okna (patrz archiveWindowSeconds i syncWatchSegment w app.js); biezacy program
+   na pasku i tak idzie za obrazem. */
 h = harness({
   isArchive: true, duration: 7199, currentTime: 1200,
   program: { start: NOW - 7200000, end: NOW - 3600000, title: "Film" }
@@ -739,8 +741,8 @@ h = harness({
   program: { start: NOW - 7200000, end: NOW - 3600000, title: "Film" }
 });
 h.api.seekBy(1);
-check("nagranie: ⏩ na koncu programu nie wchodzi w nastepny material",
-  h.video.currentTime === 3600 && h.calls.goLive === 0 && h.calls.play.length === 0,
+check("nagranie dluzsze niz program: ⏩ na koncu programu plynie dalej w oknie (bez przeladowania)",
+  h.video.currentTime === 3605 && h.calls.goLive === 0 && h.calls.play.length === 0,
   "currentTime=" + h.video.currentTime);
 
 h = harness({
@@ -748,8 +750,8 @@ h = harness({
   program: { start: NOW - 7200000, end: NOW - 3600000, title: "Film" }
 });
 h.api.seekBy(1);
-check("nagranie VLC: ⏩ tez zatrzymuje sie na granicy programu, nie na koncu nagrania",
-  h.calls.seek.length === 1 && h.calls.seek[0] === 3600000,
+check("nagranie VLC: ⏩ na koncu programu plynie dalej w oknie, nie na koncu nagrania",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 3605000,
   JSON.stringify(h.calls.seek));
 
 h = harness({

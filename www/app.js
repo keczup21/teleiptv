@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.1";
+  var APP_VERSION = "3.0.2";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -143,6 +143,12 @@
     engineLoading: false,
     watchChannel: null,
     watchProgram: null,
+    /* Początek okna archiwum w zegarze (ms): pozycja 0 obrazu odpowiada tej
+       chwili. Serwer timeshiftu często oddaje dłuższe okno niż zamówiony program,
+       więc obraz sam płynie z jednego programu w drugi — pozycja przeliczona na
+       zegar mówi, który program z EPG leci w danym miejscu (patrz
+       syncWatchSegment / watchWindowStart). */
+    watchWindowStart: 0,
     /* przewijanie archiwum: ostatni skok (kierunek i ile sekund). Pasek opisuje
        nim chwilę, w której dekoder donosi obraz na nową pozycję — bez tego
        wyglądało to jak wczytywanie strumienia od zera. */
@@ -6709,6 +6715,10 @@
     state.sourceIndex = -1;          /* -1 → pierwszy wpis wybierze nextSourceEntry() */
     state.watchChannel = channel;
     state.watchProgram = program || null;
+    /* Okno archiwum zaczyna się na początku programu — od tej chwili liczymy zegar
+       pozycji, czyli który program z EPG leci w danym miejscu nagrania (patrz
+       watchWindowStart / syncWatchSegment). */
+    state.watchWindowStart = program ? program.start : 0;
     /* nowy kanał (albo nowe okno archiwum) = poprzednia pauza na żywo nie
        obowiązuje — inaczej „wznów” wróciłoby do starego kanału */
     state.livePauseAt = 0;
@@ -7004,6 +7014,68 @@
     return Math.max(0, (Math.min(program.end, Date.now()) - program.start) / 1000);
   }
 
+  /* Program z EPG obejmujący daną chwilę (zegar). Zwraca null, gdy kanał nie ma
+     wtedy żadnego programu. */
+  function programAt(channel, wallMs) {
+    if (!channel) return null;
+    var list = programsFor(channel);
+    for (var i = 0; i < list.length; i++) {
+      if (wallMs >= list[i].start && wallMs < list[i].end) return list[i];
+    }
+    return null;
+  }
+
+  /* Pozycja obrazu w oknie archiwum (ms) — niezależnie od tego, czym jest rysowany:
+     element <video> albo silnik odbiornika (VLC — patrz vlcEvent). */
+  function watchPositionMs() {
+    if (vlcActive() && state.vlcLength > 0) return state.vlcTime | 0;
+    var video = $("video");
+    if (video && isFinite(video.currentTime)) return video.currentTime * 1000;
+    return 0;
+  }
+
+  /* Długość całego okna oddanego przez serwer (s). Bywa dłuższa niż zamówiony
+     program — wtedy obraz płynie dalej sam, bez przeładowania strumienia. */
+  function archiveWindowSeconds() {
+    if (vlcActive() && state.vlcLength > 0) return state.vlcLength / 1000;
+    var video = $("video");
+    if (video && isFinite(video.duration) && video.duration > 0) return video.duration;
+    return 0;
+  }
+
+  /* O ile sekund bieżący program jest przesunięty w oknie (początek programu
+     względem początku okna). Bez okna albo bez programu — zero, czyli dawny sposób
+     liczenia „od początku programu”. */
+  function watchSegmentOffsetSeconds() {
+    if (!state.watchWindowStart) return 0;
+    var program = state.watchProgram;
+    if (!program) return 0;
+    return Math.max(0, (program.start - state.watchWindowStart) / 1000);
+  }
+
+  var syncingSegment = false;
+
+  /* Serwer często oddaje dłuższe okno niż zamówiony program: obraz nie zatrzymuje
+     się na granicy programu, a płynie dalej — sam wchodzi w następny program.
+     Zamiast przeładowywać strumień (to dawało widoczną przerwę i skok), podmieniamy
+     tylko opis na pasku na ten program z EPG, na którym obraz naprawdę stoi. Dzięki
+     temu przejście między programami jest niewidoczne, a pasek i licznik „do końca”
+     odnoszą się do bieżącego programu (patrz updateOsdProgress). */
+  function syncWatchSegment() {
+    if (syncingSegment) return;
+    if (!state.isArchive || !state.watchChannel || !state.watchWindowStart) return;
+    var program = state.watchProgram;
+    if (!program || program.timeshift) return;
+    var wall = state.watchWindowStart + watchPositionMs();
+    if (wall >= program.start && wall < program.end) return;
+    var segment = programAt(state.watchChannel, wall);
+    if (!segment) return;
+    state.watchProgram = segment;
+    syncingSegment = true;
+    updateOsd();
+    syncingSegment = false;
+  }
+
   /* Sąsiedni program tego samego kanału w EPG — poprzedni (−1) albo następny
      (+1) względem oglądanego programu (state.watchProgram). Bierzemy tylko te,
      które już się zaczęły (start <= teraz), bo materiał, który dopiero będzie,
@@ -7034,10 +7106,36 @@
 
   /* Przejście na sąsiedni program z EPG: zwraca true, gdy było na co przejść.
      Używa tego przewijanie na granicy okna (seekBy, seekArchiveHardware) oraz
-     przyciski „Poprzedni / Następny” w pasku (watchProgramStep). */
+     przyciski „Poprzedni / Następny” w pasku (watchProgramStep).
+
+     Gdy sąsiad leży już w TYM SAMYM oknie od serwera (okno obejmuje kilka
+     programów), nie przeładowujemy strumienia — wystarczy w nim skoczyć. Dzięki
+     temu „następny / poprzedni” przechodzi płynnie, bez widocznej przerwy i skoku.
+     Tylko gdy sąsiada nie ma w oknie, wczytujemy jego własne okno (playChannel). */
   function stepToNeighbor(direction) {
     var target = neighborProgram(direction);
     if (!target) return false;
+
+    if (state.isArchive && state.watchWindowStart) {
+      var windowSeconds = archiveWindowSeconds();
+      if (windowSeconds > 0) {
+        var seekTo = direction > 0
+          ? (target.start - state.watchWindowStart) / 1000
+          : (target.end - state.watchWindowStart) / 1000 - 1;
+        if (seekTo >= 0 && seekTo <= windowSeconds - 0.5) {
+          if (seekWithinWindow(seekTo)) {
+            if (direction < 0) {
+              state.rollAt = Date.now();
+              state.rewindEnd = true;
+            } else {
+              state.rewindEnd = false;
+            }
+            return true;
+          }
+        }
+      }
+    }
+
     playChannel(state.watchChannel, target, "playerScreen");
     if (direction < 0) {
       /* „wstecz”: poprzedni program otwiera się na swoim końcu, a nie od
@@ -7049,6 +7147,32 @@
     } else {
       state.rewindEnd = false;
     }
+    return true;
+  }
+
+  /* Skok w bieżącym oknie archiwum na zadaną pozycję (sekundy od początku okna).
+     Nie wczytuje strumienia od nowa — to zwykłe przewinięcie w tym, co już leci,
+     więc obraz nie mruga. Zwraca false, gdy nie ma po czym skakać. */
+  function seekWithinWindow(seconds) {
+    var ms = Math.max(0, Math.round(seconds * 1000));
+    if (vlcActive() && state.vlcLength > 0) {
+      if (!vlcSeek(ms)) return false;
+      /* silnik donosi jeszcze starą pozycję — zapamiętujemy cel skoku (patrz
+         seekAnchorMs), a pasek ruszamy od razu, żeby opis był aktualny */
+      state.vlcPendingSeek = ms;
+      state.vlcPendingAt = Date.now();
+      state.vlcTime = ms;
+      updateOsdProgress();
+      showSeekOverlay();
+      return true;
+    }
+    var video = $("video");
+    if (!video || !isFinite(video.duration) || video.duration <= 0) return false;
+    video.currentTime = Math.min(seconds, video.duration);
+    var resume = video.play();
+    if (resume && resume.catch) resume.catch(function () {});
+    updateOsdProgress();
+    showSeekOverlay();
     return true;
   }
 
@@ -7081,20 +7205,22 @@
   /* Czy odtwarzane okno archiwum dobiegło końca? Pytają o to przewijanie na
      granicy (seekBy) i automatyczne przejście (rollArchiveAtEnd). Pozycję i
      długość bierze się z elementu <video> albo z zegara silnika (patrz vlcEvent).
-     Okno przycinamy do granicy programu z EPG (patrz archiveProgramSeconds). */
-  function archiveAtProgramEnd() {
+     Patrzymy na koniec CAŁEGO okna oddanego przez serwer, a nie na granicę
+     programu: serwer często oddaje dłuższe okno niż zamówiony program i obraz
+     płynie wtedy dalej, sam przechodząc w następny program (patrz
+     syncWatchSegment). Przeładowanie strumienia dopiero na końcu okna daje
+     płynne przejście, bez widocznej przerwy. */
+  function archiveAtWindowEnd() {
     if (!state.isArchive || atLiveEdge()) return false;
-    var programSeconds = archiveProgramSeconds();
-    if (programSeconds <= 0) return false;
+    var windowSeconds = archiveWindowSeconds();
+    if (windowSeconds <= 0) return false;
     if (nativeLayerActive()) {
       if (state.vlcLength <= 0) return false;
-      var limitMs = Math.min(state.vlcLength, programSeconds * 1000);
-      return (state.vlcTime | 0) >= limitMs - 500;
+      return (state.vlcTime | 0) >= state.vlcLength - 500;
     }
     var video = $("video");
     if (!video || !isFinite(video.duration) || video.duration <= 0) return false;
-    var limit = Math.min(video.duration, programSeconds);
-    return video.currentTime >= limit - 0.5;
+    return video.currentTime >= video.duration - 0.5;
   }
 
   /* Ile czekamy po przejściu, zanim znów patrzymy na koniec programu — nowe okno
@@ -7115,10 +7241,10 @@
          nie przeskakujemy w przód, póki obraz siedzi na końcu — inaczej ⏪
          odbiłoby zaraz z powrotem do programu, z którego przyszliśmy. Gdy obraz
          ruszy z końca, znacznik gaśnie i zwykłe przejście działa dalej. */
-      if (!archiveAtProgramEnd()) state.rewindEnd = false;
+      if (!archiveAtWindowEnd()) state.rewindEnd = false;
       return false;
     }
-    if (!force && !archiveAtProgramEnd()) return false;
+    if (!force && !archiveAtWindowEnd()) return false;
     var target = neighborProgram(1);
     if (!target) return false;
     state.rollAt = Date.now();
@@ -7178,10 +7304,12 @@
       return;
     }
 
-    /* Okno przycinamy do granicy programu z EPG, a nie do końca nagrania oddanego
-       przez serwer (patrz archiveProgramSeconds) — dzięki temu pasek i licznik
-       opisują program, który użytkownik naprawdę wybrał. */
-    var windowSeconds = archiveProgramSeconds();
+    /* Krok liczymy po CAŁYM oknie od serwera, a nie po samym programie: gdy okno
+       obejmuje jeszcze następny program, ⏩ przechodzi w niego płynnie, bez
+       przeładowania strumienia (opis na pasku idzie za bieżącym programem — patrz
+       syncWatchSegment / updateOsdProgress). Dopiero na końcu okna (patrz niżej)
+       wracamy na żywo albo wczytujemy kolejny program. */
+    var windowSeconds = archiveWindowSeconds();
     var limit = windowSeconds > 0 ? Math.min(video.duration, windowSeconds) : video.duration;
 
     /* ⏩ to ruch w przód: cofnięcie na koniec poprzedniego programu przestaje
@@ -7189,11 +7317,11 @@
        i rollArchiveAtEnd) */
     if (direction > 0) state.rewindEnd = false;
 
-    /* Koniec programu z EPG (materiał odtworzony do końca, a okno nie kończy się
-       na „teraz”): ⏩ idzie do następnego programu z EPG, a ⏪ na początku do
-       poprzedniego — tak jak „następny / poprzedni” w odtwarzaczu. Bez tego
-       przewijanie na granicy programu było martwym punktem, gdy materiał oddany
-       przez serwer okazywał się dłuższy niż program z EPG (zgłoszony błąd). */
+    /* Koniec CAŁEGO okna od serwera (materiał wyczerpany, a okno nie kończy się
+       na „teraz”): ⏩ wczytuje następny program, a ⏪ na początku poprzedni — tak
+       jak „następny / poprzedni” w odtwarzaczu. W środku okna (które obejmuje
+       jeszcze następny program) nie ruszamy strumienia — obraz płynie dalej sam
+       (patrz syncWatchSegment). */
     if (!atLiveEdge()) {
       if (direction > 0 && video.currentTime >= limit - 0.5 && stepToNeighbor(1)) return;
       if (direction < 0 && video.currentTime <= 0.5 && stepToNeighbor(-1)) return;
@@ -7276,10 +7404,11 @@
       return;
     }
 
-    /* krok kończy się na granicy programu, nie na końcu nagrania od serwera
-       (patrz archiveProgramSeconds) */
-    var programSeconds = archiveProgramSeconds();
-    var limitMs = programSeconds > 0 ? Math.min(state.vlcLength, programSeconds * 1000) : state.vlcLength;
+    /* krok kończy się na końcu okna od serwera, nie na granicy programu — okno może
+       obejmować następny program, więc ⏩ płynnie wchodzi w niego (patrz
+       syncWatchSegment / archiveWindowSeconds) */
+    var windowSeconds = archiveWindowSeconds();
+    var limitMs = windowSeconds > 0 ? Math.min(state.vlcLength, windowSeconds * 1000) : state.vlcLength;
 
     /* ⏩ to ruch w przód: cofnięcie na koniec poprzedniego programu przestaje
        obowiązywać (patrz seekBy i stepToNeighbor) */
@@ -8979,6 +9108,11 @@
     var bar = $("playerProgress");
     if (!bar) return;
 
+    /* Okno od serwera może obejmować kilka programów — obraz sam płynie z jednego
+       w drugi. Najpierw ustalamy więc, na którym programie z EPG teraz stoi, żeby
+       pasek i licznik opisywały bieżący program (patrz syncWatchSegment). */
+    if (state.isArchive) syncWatchSegment();
+
     var programSeconds = state.isArchive ? archiveProgramSeconds() : 0;
 
     /* Nagranie z obrazem silnika odbiornika (VLC): pozycję i długość okna zna
@@ -8988,7 +9122,10 @@
     if (state.isArchive && vlcActive() && state.vlcLength > 0) {
       var total = state.vlcLength / 1000;
       if (programSeconds > 0) total = Math.min(total, programSeconds);
-      var at = Math.min(state.vlcTime | 0, total * 1000);
+      /* Pozycja względem początku bieżącego programu: okno może zaczynać się
+         wcześniej, gdy obejmuje kilka programów (patrz watchSegmentOffsetSeconds). */
+      var offsetMs = watchSegmentOffsetSeconds() * 1000;
+      var at = Math.min(Math.max((state.vlcTime | 0) - offsetMs, 0), total * 1000);
       bar.style.width = Math.min(100, Math.max(0, (at / (total * 1000)) * 100)) + "%";
       var vlcTimeEl = $("playerTime");
       if (vlcTimeEl) {
@@ -9002,7 +9139,9 @@
     if (state.isArchive && video && isFinite(video.duration) && video.duration > 0) {
       var windowSeconds = video.duration;
       if (programSeconds > 0) windowSeconds = Math.min(windowSeconds, programSeconds);
-      var where = Math.min(video.currentTime, windowSeconds);
+      /* pozycja względem początku bieżącego programu (patrz watchSegmentOffsetSeconds) */
+      var offset = watchSegmentOffsetSeconds();
+      var where = Math.min(Math.max(video.currentTime - offset, 0), windowSeconds);
       bar.style.width = (where / windowSeconds) * 100 + "%";
       var timeEl = $("playerTime");
       if (timeEl) {
