@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.2";
+  var APP_VERSION = "3.0.3";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -6730,8 +6730,22 @@
 
     var source;
     try {
+      /* Okno archiwum przedłużamy do końca NASTĘPNEGO programu, który już się
+         zaczął: obraz płynie wtedy przez granicę programów w TYM SAMYM strumieniu
+         — bez przeładowania i widocznej przerwy. Dokładnie tak samo „płyną” skoki
+         ⏪/⏩ i „następny / poprzedni”, które w oknie obejmującym kilka programów
+         nie ruszają strumienia, tylko skaczą w tym, co już leci (patrz
+         syncWatchSegment / stepToNeighbor). Gdy w tę stronę nie ma już programu,
+         albo obecny jeszcze leci (koniec okna = „teraz”), zostaje sam program.
+         Pozycja 0 obrazu to nadal początek programu, więc wczytanie startuje tam,
+         gdzie trzeba — przedłużamy tylko koniec okna. */
+      var windowEnd = Math.min(program ? program.end : 0, Date.now());
+      if (program) {
+        var after = neighborProgram(1);
+        if (after) windowEnd = Math.max(windowEnd, Math.min(after.end, Date.now()));
+      }
       source = program
-        ? buildCatchupUrl(channel, program.start, Math.min(program.end, Date.now()))
+        ? buildCatchupUrl(channel, program.start, windowEnd)
         : channel.streamUrl;
     } catch (error) {
       alert(error.message);

@@ -223,7 +223,7 @@ function zapHarness(o) {
    interesuje nas tylko decyzja, gdzie wraca „Wstecz” i co sie zeruje. */
 function playHarness(o) {
   o = o || {};
-  const calls = { screens: [], seekCleared: 0, markedUhd: 0 };
+  const calls = { screens: [], seekCleared: 0, markedUhd: 0, catchup: [] };
   const sandbox = {
     state: {
       playerReturn: o.playerReturn || "browserScreen",
@@ -237,7 +237,15 @@ function playHarness(o) {
     startRecentWatch: function () {},
     clearSeekMark: function () { calls.seekCleared++; },
     destroyEngine: function () {},
-    buildCatchupUrl: function () { return "http://host/catchup.ts"; },
+    /* stały zegar, żeby granice okna (koniec programu / „teraz”) były policzalne */
+    Date: { now: function () { return NOW; } },
+    /* jak w aplikacji: sąsiedni program z EPG — okno archiwum sięga jego końca
+       (patrz playChannel). Atrapa zwraca program podany w opcji „nextProgram”. */
+    neighborProgram: function () { return o.nextProgram || null; },
+    buildCatchupUrl: function (channel, start, end) {
+      calls.catchup.push([start, end]);
+      return "http://host/catchup.ts";
+    },
     buildSourceQueue: function (source) { return [{ url: source }]; },
     /* nazwa kanału mówi wprost, że to 4K (patrz channelNameIsUhd) — atrapa, żeby
        wejście w kanał nie potrzebowało prawdziwego obrazu */
@@ -982,6 +990,34 @@ check("czas pozostały: zero i wartości ujemne pokazywane jako 00:00",
   remainSandbox.formatRemaining(0) === "00:00" &&
   remainSandbox.formatRemaining(-30) === "00:00",
   remainSandbox.formatRemaining(0));
+
+/* --- 6. okno archiwum siega nastepnego programu (plynne przejscie) -------
+   playChannel() zamawia okno od poczatku programu do konca NASTEPNEGO programu,
+   ktory juz sie zaczal — dzieki temu obraz plynie przez granice programow w tym
+   samym strumieniu, bez przeladowania i widocznej przerwy (patrz playChannel).
+   Bez nastepnego programu (albo gdy jeszcze leci) okno konczy sie na programie
+   albo na „teraz”. */
+const PROG_A = { start: NOW - 7200000, end: NOW - 3600000, title: "A" };
+const PROG_B = { start: NOW - 3600000, end: NOW, title: "B" };
+
+h = playHarness({ program: PROG_A, nextProgram: PROG_B });
+h.api.playChannel(CH, PROG_A, "playerScreen");
+check("okno archiwum siega konca nastepnego programu (plynne przejscie)",
+  h.calls.catchup.length === 1 && h.calls.catchup[0][0] === NOW - 7200000 &&
+  h.calls.catchup[0][1] === NOW,
+  JSON.stringify(h.calls.catchup));
+
+h = playHarness({ program: PROG_A });
+h.api.playChannel(CH, PROG_A, "playerScreen");
+check("bez nastepnego programu okno konczy sie na koncu programu",
+  h.calls.catchup.length === 1 && h.calls.catchup[0][1] === NOW - 3600000,
+  JSON.stringify(h.calls.catchup));
+
+h = playHarness({ program: PROG_A, nextProgram: { start: PROG_A.end, end: NOW + 3600000, title: "B" } });
+h.api.playChannel(CH, PROG_A, "playerScreen");
+check("nastepny program ciagle leci: okno konczy sie na teraz",
+  h.calls.catchup.length === 1 && h.calls.catchup[0][1] === NOW,
+  JSON.stringify(h.calls.catchup));
 
 console.log("");
 if (fails) { console.log("BLEDY: " + fails); process.exit(1); }
