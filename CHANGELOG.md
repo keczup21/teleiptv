@@ -25,6 +25,11 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [3.0.6] — 2026-10-07
+
+### Poprawiono
+- **Trzymane ⏩ idzie z licznikiem także, gdy obraz rysuje VLC** — w nagraniu odtwarzanym silnikiem odbiornika przytrzymanie „w przód” podnosiło licznik, a obraz zostawał na końcu pobranego fragmentu; teraz kolejne kroki składają się do jednego celu i obraz dogania go świeżym oknem od wskazanej chwili, tak samo jak przy odtwarzaczu wbudowanym.
+
 ## [3.0.5] — 2026-10-07
 
 ### Poprawiono

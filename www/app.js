@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.5";
+  var APP_VERSION = "3.0.6";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -7681,6 +7681,29 @@
     if (!atLiveEdge()) {
       if (direction > 0 && at >= limitMs - 500 && stepToNeighbor(1)) return;
       if (direction < 0 && at <= 500 && stepToNeighbor(-1)) return;
+    }
+
+    /* ⏩ w archiwum silnika (VLC): trzymane naciśnięcia pilota tworzą serię, która
+       dolicza się do JEDNEGO celu w czasie bezwzględnym okna i dogania go świeżym
+       oknem od tego celu — tak samo jak przy elemencie <video> (patrz forwardSeek /
+       flushForwardSeek). Silnik przewija tylko po tym, co już pobrał, więc krok po
+       kroku seria zamierała na końcu bufora, a licznik „Przesunięto o +N s” rósł
+       dalej (zgłoszenie z kanapy). Pierwszy krok zostaje zwykłym skokiem zegara
+       silnika — seria zaczyna się od drugiego naciśnięcia. */
+    if (direction > 0 && state.seekDirection === 1 && state.seekAt &&
+        Date.now() - state.seekAt <= SEEK_GRACE) {
+      var windowStart = state.watchWindowStart ||
+        (state.watchProgram ? state.watchProgram.start : 0);
+      var forwardTarget = Math.max(0, Math.min(limitMs, at + stepMs));
+      state.seekGoalMs = windowStart + forwardTarget;
+      state.seekGoalAt = Date.now();
+      var seriesMoved = Math.round(forwardTarget / 1000) - Math.round(at / 1000);
+      if (seriesMoved) markSeek(1, Math.abs(seriesMoved));
+      updateOsdProgress();
+      showSeekOverlay();
+      if (Date.now() - (state.seekFlushAt || 0) >= FORWARD_FLUSH_MS) flushForwardSeek();
+      else scheduleForwardFlush();
+      return;
     }
 
     var target = Math.max(0, Math.min(limitMs, at + direction * stepMs));

@@ -515,6 +515,28 @@ check("nagranie VLC, most milczy: zostaje pasek z informacja",
   h.calls.osd === 1 && h.calls.seek.length === 1 && h.calls.play.length === 0,
   JSON.stringify(h.calls));
 
+/* --- 5c. trzymane ⏩ na nagraniu silnika (VLC): jeden cel, jedno wczytanie --- */
+/* Silnik przewija tylko po tym, co już pobrał, więc krok po kroku seria zamierała
+   na końcu bufora, a licznik „Przesunięto o +N s” rósł dalej. Drugie i kolejne
+   naciśnięcie dolicza się więc do jednego celu (bezwzględny czas okna), a świeże
+   okno od tego celu dogrywa dławik — tak samo jak przy elemencie <video>
+   (patrz seekArchiveHardware / flushForwardSeek). Pierwszy krok zostaje skokiem
+   zegara silnika. */
+h = harness({
+  isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000,
+  program: { start: NOW - 5400000, end: NOW - 600000, title: "Film" }
+});
+h.api.seekBy(1);                          /* pierwszy krok: zegar silnika */
+check("seria ⏩ VLC: pierwszy krok idzie zegarem silnika",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 310000 && h.calls.play.length === 0,
+  JSON.stringify(h.calls));
+h.api.seekBy(1);                          /* kolejny krok w serii: jeden cel + okno */
+check("seria ⏩ VLC: kolejny krok dolicza cel i wczytuje okno od wskazanej chwili",
+  h.calls.play.length === 1 && h.calls.seek.length === 1 &&
+  h.calls.play[0].start === (NOW - 5400000) + 320000 &&
+  h.api.state.seekGoalMs === (NOW - 5400000) + 320000,
+  JSON.stringify({ play: h.calls.play, goal: h.api.state.seekGoalMs }));
+
 /* --- 6. pauza i wznowienie kanalu na zywo (pilot: pauza, play) ---------- */
 let z;
 h = ctrlHarness({ isArchive: false, paused: false, epg: { title: "Wiadomosci" } });
