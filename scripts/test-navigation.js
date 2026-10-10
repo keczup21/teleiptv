@@ -745,6 +745,17 @@ check("pasek postepu stoi miedzy biezacym programem a wierszem nastepnym",
   src.indexOf("main.appendChild(nowRow)") < src.indexOf("main.appendChild(progRow)") &&
   src.indexOf("main.appendChild(progRow)") < src.indexOf("main.appendChild(nextRow)"));
 
+/* Kafelki rysowane są raz, a program na nich zmienia się z czasem — bez
+   odświeżania w tle „jeszcze X min” stało zamrożone i po zakończeniu programu
+   kafelek dalej pokazywał stary wpis (trzeba było zmienić kategorię i wrócić).
+   Lista odświeża się cyklicznie tylko na widocznym ekranie kanałów. */
+check("lista kanalow odswieza sie w tle na widocznym ekranie",
+  src.indexOf("function refreshChannelList()") > 0 &&
+  src.indexOf("function updateCardProgress(card, program)") > 0 &&
+  src.indexOf("function startListTicker()") > 0 &&
+  src.indexOf('if (id === "browserScreen") startListTicker();') > 0 &&
+  src.indexOf("else stopListTicker();") > 0);
+
 /* --- 15. zakładki ustawień (Ogólne / Aktualizacja / Instrukcja) ----------
    Ustawienia rosły w jedną długą kartę, w której instrukcja pilota stała
    pomiędzy polami formularza. Teraz są trzy zakładki: „Ogólne” (sama

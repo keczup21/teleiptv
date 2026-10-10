@@ -25,6 +25,15 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [3.0.4] — 2026-10-07
+
+### Poprawiono
+- **Postęp programu na liście kanałów idzie z czasem** — licznik „jeszcze X min” i pasek odświeżają się same, a po zakończeniu programu kafelek przechodzi na następny program bez zmiany kategorii i powrotu.
+- **Przewijanie w przód w archiwum trafia dokładnie tam, gdzie wskazano** — gdy skok wypadał poza pobrany fragment nagrania, obraz lądował wcześniej, niż pokazywał pasek; teraz odtwarzacz wczytuje materiał od wskazanej chwili, więc skok ląduje w wybranym miejscu.
+
+### Zmieniono
+- **Licznik „do końca” pokazuje ostatnie sekundy** — gdy do końca zostało mniej niż godzina, licznik zmienia format z hh:mm na mm:ss.
+
 ## [3.0.3] — 2026-10-07
 
 ### Poprawiono

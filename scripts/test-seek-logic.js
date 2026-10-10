@@ -54,6 +54,9 @@ function harness(o) {
   const calls = { play: [], goLive: 0, osd: 0, error: [], osdHide: 0, timeouts: [], seek: [], painted: 0 };
   const overlay = { classList: { remove: function () {}, add: function () {} } };
   const video = { duration: o.duration, currentTime: o.currentTime || 0 };
+  /* pobrany fragment (patrz video.buffered w app.js) — gdy podany, skok poza
+     niego otwiera świeże okno catch-up od wskazanej chwili (reloadArchiveAt) */
+  if (o.buffered !== undefined) video.buffered = o.buffered;
   /* Atrapy elementów interfejsu (wpis na pasku, komunikat na środku obrazu):
      jedna atrapa na id, żeby dalo sie sprawdzic, co aplikacja na nim pokazuje. */
   const els = {};
@@ -98,7 +101,7 @@ function harness(o) {
       if (id === "video") return video;
       return stub(id);
     },
-    playChannel: function (channel, program, screen) { calls.play.push({ channel: channel, program: program, screen: screen }); },
+    playChannel: function (channel, program, screen, startAtMs) { calls.play.push({ channel: channel, program: program, screen: screen, start: startAtMs }); },
     goLive: function () { calls.goLive++; },
     showOsd: function () { calls.osd++; },
     showPlayerError: function (m) { calls.error.push(m); },
@@ -365,6 +368,33 @@ h.api.seekBy(-1);
 check("zakonczone nagranie, poczatek: nic nie przeadowuje",
   h.video.currentTime === 0 && h.calls.play.length === 0,
   "currentTime=" + h.video.currentTime);
+
+/* --- 4b. skok do przodu poza pobrany fragment --------------------------- */
+/* Catch-up podawany strumieniem bez zakresów bajtów: element <video> dociąga skok
+   tylko do końca pobranego bufora, więc skok poza bufor otwiera świeże okno
+   catch-up od wskazanej chwili (patrz seekBeyondBuffer / reloadArchiveAt). */
+h = harness({
+  isArchive: true, duration: 2520, currentTime: 440,
+  buffered: { length: 1, end: function () { return 440; } },
+  program: { start: NOW - 600000, end: NOW, title: "P" }
+});
+h.api.seekBy(1);
+check("skok do przodu poza pobrany fragment wczytuje okno od wskazanej chwili",
+  h.calls.play.length === 1 && h.calls.play[0].start === NOW - 150000 &&
+  h.calls.play[0].program.title === "P" && h.calls.play[0].screen === "playerScreen" &&
+  h.video.currentTime === 440,
+  JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 2520, currentTime: 180,
+  buffered: { length: 1, end: function () { return 440; } },
+  program: { start: NOW - 600000, end: NOW, title: "P" }
+});
+h.api.seekBy(1);
+check("skok w granicach pobranego fragmentu zostaje w tym samym oknie",
+  h.calls.play.length === 0 && h.video.currentTime === 190,
+  "currentTime=" + h.video.currentTime);
+
 
 /* --- 5. nagranie o nieznanej dlugosci ----------------------------------- */
 h = harness({ isArchive: true, duration: Infinity, currentTime: 0, program: { start: NOW - 600000, end: NOW, title: "P", timeshift: true } });
@@ -963,9 +993,9 @@ check("⏩ w cofnietym programie: znacznik cofniecia gasnie",
 
 /* --- 5. czas pozostały na pasku (formatRemaining): zawsze hh:mm, bez minusa -
    Pasek odtwarzacza dopisuje po prawej stronie, ile zostało do końca programu
-   albo nagrania, poprzedzone podpisem „do końca” (patrz setOsdRemain). Sam
-   format jest stały (godziny i minuty, obie części dwucyfrowe), więc
-   sprawdzamy wycięty z app.js kod, a nie jego kopię. */
+   albo nagrania, poprzedzone podpisem „do końca” (patrz setOsdRemain). Format
+   to hh:mm od godziny w górę, a poniżej godziny mm:ss (żeby widać było ostatnie
+   sekundy programu), więc sprawdzamy wycięty z app.js kod, a nie jego kopię. */
 function sliceFn(name) {
   const start = src.indexOf("function " + name + "(");
   if (start < 0) throw new Error("Nie znalazlem " + name + " w app.js");
@@ -976,15 +1006,16 @@ function sliceFn(name) {
 const remainSandbox = {};
 vm.createContext(remainSandbox);
 vm.runInContext(sliceFn("pad2") + "\n" + sliceFn("formatRemaining"), remainSandbox);
-check("czas pozostały: godziny i minuty, obie części dwucyfrowe",
+check("czas pozostały: od godziny w górę hh:mm, obie części dwucyfrowe",
   remainSandbox.formatRemaining(3600) === "01:00" &&
   remainSandbox.formatRemaining(5400) === "01:30" &&
   remainSandbox.formatRemaining(7200) === "02:00",
   remainSandbox.formatRemaining(3600));
-check("czas pozostały: mniej niż godzina to 00:mm, z zaokrągleniem do minuty",
-  remainSandbox.formatRemaining(2700) === "00:45" &&
-  remainSandbox.formatRemaining(60) === "00:01" &&
-  remainSandbox.formatRemaining(30) === "00:01",
+check("czas pozostały: mniej niż godzina to mm:ss, z sekundami",
+  remainSandbox.formatRemaining(3599) === "59:59" &&
+  remainSandbox.formatRemaining(2700) === "45:00" &&
+  remainSandbox.formatRemaining(60) === "01:00" &&
+  remainSandbox.formatRemaining(30) === "00:30",
   remainSandbox.formatRemaining(2700));
 check("czas pozostały: zero i wartości ujemne pokazywane jako 00:00",
   remainSandbox.formatRemaining(0) === "00:00" &&

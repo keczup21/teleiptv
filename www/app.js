@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.3";
+  var APP_VERSION = "3.0.4";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -1499,6 +1499,9 @@
     for (var i = 0; i < SCREENS.length; i++) {
       $(SCREENS[i]).classList.toggle("hidden", SCREENS[i] !== id);
     }
+    /* lista kanałów odświeża się w tle tylko wtedy, gdy jest widoczna */
+    if (id === "browserScreen") startListTicker();
+    else stopListTicker();
     notifyNativePlayer(id === "playerScreen");
     /* zegar w rogu obrazu ma sens tylko na widocznym ekranie odtwarzacza */
     syncCornerClock();
@@ -3439,15 +3442,11 @@
       track.className = "channel-progress-track";
       var progress = document.createElement("i");
       progress.className = "channel-progress";
-      var pct = Math.max(0, Math.min(100, (Date.now() - now.start) / (now.end - now.start) * 100));
-      progress.style.width = pct + "%";
       track.appendChild(progress);
       progRow.appendChild(track);
 
       var timeLeft = document.createElement("small");
       timeLeft.className = "channel-progress-left";
-      var minutesLeft = Math.max(0, Math.round((now.end - Date.now()) / 60000));
-      timeLeft.textContent = minutesLeft < 1 ? t("program_ending") : t("program_left", { m: minutesLeft });
       progRow.appendChild(timeLeft);
 
       main.appendChild(progRow);
@@ -3478,7 +3477,96 @@
     };
     card.appendChild(favorite);
 
+    /* zapamiętujemy, który program kafelek opisuje — cykliczne odświeżanie
+       listy (patrz refreshChannelList) przebudowuje kafelek tylko wtedy, gdy
+       zmienił się program; inaczej poprawia sam pasek i licznik */
+    card.setAttribute("data-now", now ? String(now.start) : "");
+    card.setAttribute("data-next", next ? String(next.start) : "");
+    updateCardProgress(card, now);
+
     return card;
+  }
+
+  /* Wypełnienie paska i podpis „jeszcze X min” bieżącego programu na kafelku.
+     Woła to budowa kafelka i cykliczne odświeżanie listy — dzięki temu licznik
+     i pasek idą z czasem, a nie zostają zamrożone na chwilę narysowania kafelka
+     (patrz refreshChannelList). */
+  function updateCardProgress(card, program) {
+    if (!program) return;
+    var progress = card.querySelector(".channel-progress");
+    if (progress) {
+      var pct = Math.max(0, Math.min(100, (Date.now() - program.start) / (program.end - program.start) * 100));
+      progress.style.width = pct + "%";
+    }
+    var timeLeft = card.querySelector(".channel-progress-left");
+    if (timeLeft) {
+      var minutesLeft = Math.max(0, Math.round((program.end - Date.now()) / 60000));
+      timeLeft.textContent = minutesLeft < 1 ? t("program_ending") : t("program_left", { m: minutesLeft });
+    }
+  }
+
+  /* Odświeżanie listy kanałów w tle: bieżący program zmienia się z upływem czasu,
+     a kafelki rysowane są tylko raz — bez tego „jeszcze X min” stało zamrożone,
+     a po zakończeniu programu kafelek dalej pokazywał stary wpis, dopóki nie
+     zmieniono kategorii i nie wrócono. Odświeżamy tylko widoczne kafelki i tylko
+     to, co się zmieniło: sam pasek i licznik bez ruszania struktury (fokus
+     zostaje), a kafelek przebudowujemy dopiero, gdy zmienił się program. */
+  function refreshChannelList() {
+    var container = $("channels");
+    if (!container) return;
+    var cards = container.children;
+    var list = state.listItems;
+    for (var i = 0; i < cards.length && i < list.length; i++) {
+      var card = cards[i];
+      if (!card.classList || !card.classList.contains("channel")) continue;
+      var channel = list[i];
+      var now = currentProgram(channel);
+      var next = nextProgram(channel);
+      var nowKey = now ? String(now.start) : "";
+      var nextKey = next ? String(next.start) : "";
+      if (card.getAttribute("data-now") !== nowKey || card.getAttribute("data-next") !== nextKey) {
+        replaceChannelCard(card, channel);
+        continue;
+      }
+      updateCardProgress(card, now);
+    }
+  }
+
+  /* Przebudowa jednego kafelka po zmianie programu: świeży kafelek wchodzi
+     w to samo miejsce, a fokus zostaje na tym, na czym stał (kanał albo gwiazdka
+     ulubionych), żeby odświeżenie nie zabrało podświetlenia pilotowi. */
+  function replaceChannelCard(card, channel) {
+    var parent = card.parentNode;
+    if (!parent) return;
+    var active = document.activeElement;
+    var role = active && card.contains(active)
+      ? (active.classList.contains("favorite-button") ? "favorite-button" : "channel-main")
+      : null;
+    var fresh = buildChannelCard(channel);
+    parent.replaceChild(fresh, card);
+    if (role) {
+      var target = fresh.querySelector("." + role);
+      if (target && target.focus) {
+        try { target.focus(); } catch (error) { /* bez fokusu też da się kliknąć */ }
+      }
+    }
+  }
+
+  /* Listę odświeżamy tylko na widocznym ekranie kanałów — na obrazie, w EPG
+     i w ustawieniach kafelków nie ma, więc budzik gasimy (patrz showScreen). */
+  var LIST_TICK_MS = 10000;
+  var listTicker = null;
+
+  function startListTicker() {
+    stopListTicker();
+    listTicker = setInterval(refreshChannelList, LIST_TICK_MS);
+  }
+
+  function stopListTicker() {
+    if (listTicker) {
+      clearInterval(listTicker);
+      listTicker = null;
+    }
   }
 
   function toggleFavorite(channel) {
@@ -6655,7 +6743,7 @@
     state.recentDirty = true;
   }
 
-  function playChannel(channel, program, returnScreen) {
+  function playChannel(channel, program, returnScreen, startAtMs) {
     clearTimeout(state.retryTimer);
     clearTimeout(state.stableTimer);
     /* nowy kanał nie może dostać panelu diagnostyki z poprzedniej próby
@@ -6717,8 +6805,10 @@
     state.watchProgram = program || null;
     /* Okno archiwum zaczyna się na początku programu — od tej chwili liczymy zegar
        pozycji, czyli który program z EPG leci w danym miejscu nagrania (patrz
-       watchWindowStart / syncWatchSegment). */
-    state.watchWindowStart = program ? program.start : 0;
+       watchWindowStart / syncWatchSegment). Gdy skok wypadł poza pobrany fragment,
+       wczytujemy świeże okno od wskazanej chwili (patrz reloadArchiveAt), więc
+       `startAtMs` przesuwa początek okna w głąb programu. */
+    state.watchWindowStart = program ? (startAtMs > 0 ? startAtMs : program.start) : 0;
     /* nowy kanał (albo nowe okno archiwum) = poprzednia pauza na żywo nie
        obowiązuje — inaczej „wznów” wróciłoby do starego kanału */
     state.livePauseAt = 0;
@@ -6745,7 +6835,7 @@
         if (after) windowEnd = Math.max(windowEnd, Math.min(after.end, Date.now()));
       }
       source = program
-        ? buildCatchupUrl(channel, program.start, windowEnd)
+        ? buildCatchupUrl(channel, state.watchWindowStart, windowEnd)
         : channel.streamUrl;
     } catch (error) {
       alert(error.message);
@@ -7059,12 +7149,14 @@
 
   /* O ile sekund bieżący program jest przesunięty w oknie (początek programu
      względem początku okna). Bez okna albo bez programu — zero, czyli dawny sposób
-     liczenia „od początku programu”. */
+     liczenia „od początku programu”. Gdy okno otwiera się w ŚRODKU programu
+     (świeże okno od wskazanej chwili — patrz reloadArchiveAt), wartość jest ujemna,
+     więc pozycja i długość patrzą od początku programu. */
   function watchSegmentOffsetSeconds() {
     if (!state.watchWindowStart) return 0;
     var program = state.watchProgram;
     if (!program) return 0;
-    return Math.max(0, (program.start - state.watchWindowStart) / 1000);
+    return (program.start - state.watchWindowStart) / 1000;
   }
 
   var syncingSegment = false;
@@ -7164,6 +7256,34 @@
     return true;
   }
 
+  /* Czy skok wypada poza to, co odtwarzacz ma już pobrane? Catch-up bywa podawany
+     strumieniem bez zakresów bajtów, więc element <video> dociąga skok tylko do
+     końca bufora (im większy skok, tym większe niedociągnięcie). Wtedy zamiast
+     skakać w tym samym oknie otwieramy świeże okno od wskazanej chwili
+     (patrz reloadArchiveAt). */
+  function seekBeyondBuffer(seconds) {
+    var video = $("video");
+    if (!video || !video.buffered || !video.buffered.length) return false;
+    return seconds > video.buffered.end(video.buffered.length - 1) + 5;
+  }
+
+  /* Świeże okno catch-up od wskazanej chwili (sekundy od początku bieżącego okna).
+     Serwer oddaje materiał zaczynający się dokładnie tam, więc obraz startuje bez
+     dalekiego skoku w pobranym fragmencie, a pasek dalej liczy od początku programu
+     (patrz watchSegmentOffsetSeconds). Świeżo wczytane okno ma wartość `rollAt`,
+     więc kilka szybkich skoków pod rząd nie wczytuje go w kółko. */
+  function reloadArchiveAt(seconds) {
+    var channel = state.watchChannel;
+    var program = state.watchProgram;
+    if (!channel || !program) return false;
+    var offset = (state.watchWindowStart || program.start) - program.start;
+    var wall = program.start + offset + Math.round(seconds * 1000);
+    var target = programAt(channel, wall) || program;
+    state.rollAt = Date.now();
+    playChannel(channel, target, "playerScreen", wall);
+    return true;
+  }
+
   /* Skok w bieżącym oknie archiwum na zadaną pozycję (sekundy od początku okna).
      Nie wczytuje strumienia od nowa — to zwykłe przewinięcie w tym, co już leci,
      więc obraz nie mruga. Zwraca false, gdy nie ma po czym skakać. */
@@ -7182,7 +7302,11 @@
     }
     var video = $("video");
     if (!video || !isFinite(video.duration) || video.duration <= 0) return false;
-    video.currentTime = Math.min(seconds, video.duration);
+    var target = Math.min(seconds, video.duration);
+    /* skok poza pobrany fragment: element i tak dociągnąłby go tylko do końca
+       bufora, więc otwieramy świeże okno catch-up od wskazanej chwili */
+    if (Date.now() - state.rollAt > 3000 && seekBeyondBuffer(target)) return reloadArchiveAt(target);
+    video.currentTime = target;
     var resume = video.play();
     if (resume && resume.catch) resume.catch(function () {});
     updateOsdProgress();
@@ -7346,7 +7470,13 @@
        (zatrzymany na ostatniej klatce) — skok ma go znowu puścić, żeby cofanie
        było widać, a nie zostawiało zamrożonej klatki (patrz stepToNeighbor) */
     var wasEnded = video.ended === true;
-    video.currentTime = Math.max(0, Math.min(limit, before + direction * step));
+    var target = Math.max(0, Math.min(limit, before + direction * step));
+    /* skok do przodu poza pobrany fragment: element dociągnąłby go tylko do końca
+       bufora, więc otwieramy świeże okno catch-up od wskazanej chwili (patrz
+       reloadArchiveAt); wstecz zostaje jak było */
+    if (direction > 0 && Date.now() - state.rollAt > 3000 &&
+        seekBeyondBuffer(target) && reloadArchiveAt(target)) return;
+    video.currentTime = target;
     if (wasEnded) {
       var resume = video.play();
       if (resume && resume.catch) resume.catch(function () {});
@@ -7521,12 +7651,18 @@
       (rest < 10 ? "0" : "") + rest;
   }
 
-  /* Ile zostało do końca w formacie hh:mm. Pasek odtwarzacza pokazuje to po
-     prawej stronie (patrz #playerRemain) razem z podpisem „do końca” — samo
-     hh:mm bez podpisu czytało się niejasno. Zaokrąglamy do pełnej minuty. */
+  /* Ile zostało do końca: „hh:mm”, a gdy do końca zostało mniej niż godzina —
+     „mm:ss”, żeby widać było ostatnie sekundy programu. Pasek odtwarzacza
+     pokazuje to po prawej stronie (patrz #playerRemain) razem z podpisem
+     „do końca”. */
   function formatRemaining(seconds) {
-    var whole = Math.max(0, Math.round(seconds / 60));
-    return pad2(Math.floor(whole / 60)) + ":" + pad2(whole % 60);
+    var total = Math.max(0, Math.round(seconds));
+    var hours = Math.floor(total / 3600);
+    if (hours > 0) {
+      var minutes = Math.round((total - hours * 3600) / 60);
+      return pad2(hours) + ":" + pad2(minutes);
+    }
+    return pad2(Math.floor(total / 60)) + ":" + pad2(total % 60);
   }
 
   /* -------------------------  PRZEWIJANIE EKRANU  --------------------------
@@ -9134,11 +9270,12 @@
        wiersz idzie pierwszy. Okno o nieznanej długości (kanał na żywo) nie ma
        czego pokazywać i zostaje przy pasku programu z EPG. */
     if (state.isArchive && vlcActive() && state.vlcLength > 0) {
-      var total = state.vlcLength / 1000;
-      if (programSeconds > 0) total = Math.min(total, programSeconds);
-      /* Pozycja względem początku bieżącego programu: okno może zaczynać się
-         wcześniej, gdy obejmuje kilka programów (patrz watchSegmentOffsetSeconds). */
+      /* okno może zaczynać się w środku programu (patrz reloadArchiveAt) — wtedy
+         i pozycję, i długość liczymy od początku programu
+         (watchSegmentOffsetSeconds jest wtedy ujemne) */
       var offsetMs = watchSegmentOffsetSeconds() * 1000;
+      var total = state.vlcLength / 1000 - offsetMs / 1000;
+      if (programSeconds > 0) total = Math.min(total, programSeconds);
       var at = Math.min(Math.max((state.vlcTime | 0) - offsetMs, 0), total * 1000);
       bar.style.width = Math.min(100, Math.max(0, (at / (total * 1000)) * 100)) + "%";
       var vlcTimeEl = $("playerTime");
@@ -9151,10 +9288,11 @@
     }
 
     if (state.isArchive && video && isFinite(video.duration) && video.duration > 0) {
-      var windowSeconds = video.duration;
-      if (programSeconds > 0) windowSeconds = Math.min(windowSeconds, programSeconds);
-      /* pozycja względem początku bieżącego programu (patrz watchSegmentOffsetSeconds) */
+      /* jak wyżej: przy oknie zaczętym w środku programu pasek i licznik liczą
+         od początku programu (watchSegmentOffsetSeconds jest wtedy ujemne) */
       var offset = watchSegmentOffsetSeconds();
+      var windowSeconds = video.duration - offset;
+      if (programSeconds > 0) windowSeconds = Math.min(windowSeconds, programSeconds);
       var where = Math.min(Math.max(video.currentTime - offset, 0), windowSeconds);
       bar.style.width = (where / windowSeconds) * 100 + "%";
       var timeEl = $("playerTime");
