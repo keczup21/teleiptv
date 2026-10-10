@@ -25,6 +25,12 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [3.0.7] — 2026-10-07
+
+### Poprawiono
+- **Przewijanie nagrania znów jest natychmiastowe** — poprzednia wersja przy drugim i kolejnym ⏩ dogrywała całe okno nagrania od nowa, przez co przewijanie było wolne, a po kilku krokach pilot przechodził do menu odtwarzacza; teraz „w przód” i „w tył” w archiwum znów robią szybki skok, bez przeładowywania obrazu.
+
+
 ## [3.0.6] — 2026-10-07
 
 ### Poprawiono
