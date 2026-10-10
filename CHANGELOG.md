@@ -25,6 +25,11 @@ i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
 
+## [3.0.5] — 2026-10-07
+
+### Poprawiono
+- **Trzymane ⏩ przewija dokładnie o tyle, ile pokazuje licznik** — przy dłuższym przytrzymaniu „w przód” licznik rósł, a obraz gubił się na końcu pobranego fragmentu nagrania; teraz kolejne kroki składają się do jednego celu, a obraz dogania go świeżym oknem od wskazanej chwili, więc licznik i obraz idą zgodnie (przy cofaniu tak samo).
+
 ## [3.0.4] — 2026-10-07
 
 ### Poprawiono

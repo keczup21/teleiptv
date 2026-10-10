@@ -395,6 +395,31 @@ check("skok w granicach pobranego fragmentu zostaje w tym samym oknie",
   h.calls.play.length === 0 && h.video.currentTime === 190,
   "currentTime=" + h.video.currentTime);
 
+/* --- 4c. trzymane ⏩ (seria skoków): jeden cel, jedno wczytanie ---------- */
+/* Trzymanie ⏩ to seria kroków. Każdy dolicza się do jednego celu (bezwzględny czas
+   okna), a świeże okno otwiera się dławione — nie na każdy krok (patrz forwardSeek /
+   scheduleForwardFlush). Bez tego obraz zamierał na końcu bufora, a licznik na pasku
+   rósł dalej (zgłoszenie: „przewinie o 300 s, a obraz się gubi”). */
+h = harness({
+  isArchive: true, duration: 2520, currentTime: 440,
+  buffered: { length: 1, end: function () { return 440; } },
+  program: { start: NOW - 600000, end: NOW, title: "P" }
+});
+h.api.seekBy(1);                          /* pierwszy krok poza bufor: wczytuje od razu */
+check("seria ⏩: pierwszy krok poza bufor wczytuje okno od wskazanej chwili",
+  h.calls.play.length === 1 && h.calls.play[0].start === NOW - 150000,
+  JSON.stringify(h.calls.play));
+h.api.seekBy(1);                          /* kolejny krok w trakcie serii: tylko dolicza cel */
+check("seria ⏩: kolejny krok dolicza się do celu, bez wczytywania okna na krok",
+  h.calls.play.length === 1 && h.api.state.seekGoalMs === NOW - 140000,
+  "play=" + h.calls.play.length + " goal=" + h.api.state.seekGoalMs);
+const flushTimer = h.calls.timeouts[h.calls.timeouts.length - 1];
+flushTimer.fn();                          /* dławik dogrywa zaplanowany cel */
+check("seria ⏩: dławik dogrywa zaplanowany cel jednym oknem",
+  h.calls.play.length === 2 && h.calls.play[1].start === NOW - 140000 &&
+  h.api.state.seekGoalMs === NOW - 140000,
+  JSON.stringify(h.calls.play));
+
 
 /* --- 5. nagranie o nieznanej dlugosci ----------------------------------- */
 h = harness({ isArchive: true, duration: Infinity, currentTime: 0, program: { start: NOW - 600000, end: NOW, title: "P", timeshift: true } });

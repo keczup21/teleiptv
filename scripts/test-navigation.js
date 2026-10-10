@@ -1028,7 +1028,8 @@ check("klawisz wyslany dopiero na zwolnieniu tez przewija - i tylko raz",
   src.indexOf("var seekKeyDown = {};") > 0 &&
   src.indexOf("seekKeyDown[key] = true;") > 0 &&
   src.indexOf("seekKeyDown[code] = true;") > 0 &&
-  src.indexOf("if (seekKeyDown[seekCode]) { delete seekKeyDown[seekCode]; return; }") > 0 &&
+  src.indexOf("if (seekKeyDown[seekCode]) { delete seekKeyDown[seekCode]; seekHeld = true; }") > 0 &&
+  src.indexOf("if (seekHeld) { if (state.seekGoalMs) flushForwardSeek(); return; }") > 0 &&
   src.indexOf("var seekDirection = seekKeyDirection(seekCode, event.key, false);") > 0);
 
 /* --- 22. program TV: siatka okienkowa (wszystkie kanały), większe okno -------
