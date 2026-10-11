@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.8";
+  var APP_VERSION = "3.0.9";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -155,6 +155,16 @@
     seekAt: 0,
     seekDirection: 0,
     seekSize: 0,
+    /* przewijanie ⏩ trzymane: skumulowany cel serii w sekundach od początku okna
+       i chwila ostatniego kroku (patrz forwardGoal) oraz budzik dogrania celu po
+       zakończeniu serii (patrz scheduleForwardFlush / flushForwardSeek). Seria
+       wczytuje świeże okno RAZ, na końcu — a nie w trakcie trzymania klawisza. */
+    seekGoal: 0,
+    seekGoalAt: 0,
+    seekFlushTimer: null,
+    /* świeże okno wczytane w środku serii ⏩ to wciąż to samo przewijanie — nie
+       zeruje wpisu „Przesunięto o +N s” (patrz flushForwardSeek / playChannel) */
+    keepSeekMark: false,
     osdTimer: null,
     /* kotwica skoku w nagraniu VLC: cel ostatniego skoku i chwila zlecenia
        (patrz seekAnchorMs) */
@@ -6814,8 +6824,16 @@
     state.livePauseAt = 0;
     state.lastErrorAt = 0;
     /* nowy obraz nie jest przewinięciem: kasujemy wpis o poprzednim skoku, żeby
-       „waiting” przy wczytywaniu nie pokazał go na cudzym kanale */
-    clearSeekMark();
+       „waiting” przy wczytywaniu nie pokazał go na cudzym kanale. Wyjątek: okno
+       wczytane w środku serii ⏩ (keepSeekMark) to wciąż to samo przewijanie, więc
+       licznik „Przesunięto o +N s” zostaje (patrz flushForwardSeek). Zaplanowany
+       cel serii i jego budzik gasną zawsze — nie dotyczą nowego obrazu. */
+    if (!state.keepSeekMark) clearSeekMark();
+    state.keepSeekMark = false;
+    clearTimeout(state.seekFlushTimer);
+    state.seekFlushTimer = null;
+    state.seekGoal = 0;
+    state.seekGoalAt = 0;
     destroyEngine();
 
     var source;
@@ -7284,6 +7302,53 @@
     return true;
   }
 
+  /* ---  DOGRANIE SERII ⏩: kroki sumują się do jednego celu  ---
+     Catch-up idzie strumieniem bez zakresów bajtów, więc element <video> dociąga
+     skok w przód tylko do końca pobranego fragmentu. Trzymane ⏩ sumuje więc kroki
+     do JEDNEGO celu (state.seekGoal, sekundy od początku okna), a obraz dogania go
+     świeżym oknem od tej chwili. Wczytanie robimy RAZ — gdy trzymanie się skończy,
+     a nie w trakcie serii: przeładowywanie w trakcie trzymania (jak w 3.0.5) rwało
+     obraz i psuło odtwarzanie oraz catch-up. Pojedyncze naciśnięcie to ta sama
+     droga z jednym krokiem. */
+  var FORWARD_FLUSH_MS = 500;
+
+  /* Cel serii ⏩: pierwszy krok bierze bieżącą pozycję, kolejne doliczają się do
+     celu (licznik „Przesunięto o +N s” sumuje tak samo — patrz markSeek). */
+  function forwardGoal(before, step, limit) {
+    var now = Date.now();
+    var active = state.seekGoalAt && now - state.seekGoalAt <= SEEK_GRACE;
+    var base = active ? state.seekGoal : before;
+    var goal = Math.max(0, Math.min(limit, base + step));
+    state.seekGoal = goal;
+    state.seekGoalAt = now;
+    return goal;
+  }
+
+  /* Dogranie celu serii ⏩ jednym wczytaniem świeżego okna od wskazanej chwili.
+     Wpisu „Przesunięto o +N s” nie zerujemy — seria ma jeden licznik, a nie
+     zerowanie przy każdym oknie (patrz keepSeekMark w playChannel). */
+  function flushForwardSeek() {
+    clearTimeout(state.seekFlushTimer);
+    state.seekFlushTimer = null;
+    var goal = state.seekGoal;
+    if (!goal) return;
+    state.seekGoal = 0;
+    state.seekGoalAt = 0;
+    state.keepSeekMark = true;
+    if (!reloadArchiveAt(goal)) state.keepSeekMark = false;
+  }
+
+  /* Wczytanie w środku serii ⏩ czeka, aż trzymanie się skończy: budzik zwalnia się
+     przy każdym kroku, więc odpala dopiero po ostatnim (albo na zwolnieniu
+     klawisza — patrz obsługa klawiszy). */
+  function scheduleForwardFlush() {
+    clearTimeout(state.seekFlushTimer);
+    state.seekFlushTimer = setTimeout(function () {
+      state.seekFlushTimer = null;
+      flushForwardSeek();
+    }, FORWARD_FLUSH_MS);
+  }
+
   /* Skok w bieżącym oknie archiwum na zadaną pozycję (sekundy od początku okna).
      Nie wczytuje strumienia od nowa — to zwykłe przewinięcie w tym, co już leci,
      więc obraz nie mruga. Zwraca false, gdy nie ma po czym skakać. */
@@ -7470,16 +7535,47 @@
        (zatrzymany na ostatniej klatce) — skok ma go znowu puścić, żeby cofanie
        było widać, a nie zostawiało zamrożonej klatki (patrz stepToNeighbor) */
     var wasEnded = video.ended === true;
-    var target = Math.max(0, Math.min(limit, before + direction * step));
-    /* skok do przodu poza pobrany fragment: element dociągnąłby go tylko do końca
-       bufora, więc otwieramy świeże okno catch-up od wskazanej chwili (patrz
-       reloadArchiveAt); wstecz zostaje jak było */
-    if (direction > 0 && Date.now() - state.rollAt > 3000 &&
-        seekBeyondBuffer(target) && reloadArchiveAt(target)) return;
+
+    /* ⏩ w przód: kroki składają się do JEDNEGO celu, a obraz dogania go świeżym
+       oknem na KOŃCU serii (patrz forwardGoal / flushForwardSeek). Skok mieszczący
+       się w pobranym fragmencie zostaje zwykłym przewinięciem w tym, co już leci
+       (obraz nie mruga). */
+    if (direction > 0) {
+      var ahead = Math.max(0, Math.min(limit, before + step));
+      if (seekBeyondBuffer(ahead)) {
+        forwardGoal(before, step, limit);
+        markSeek(1, step);
+        showSeekOverlay();
+        updateOsdProgress();
+        scheduleForwardFlush();
+        return;
+      }
+      state.seekGoal = 0;
+      state.seekGoalAt = 0;
+      video.currentTime = ahead;
+      if (wasEnded) {
+        var resume = video.play();
+        if (resume && resume.catch) resume.catch(function () {});
+      }
+      $("playerProgress").style.width = (Math.min(video.currentTime, limit) / limit) * 100 + "%";
+      $("playerTime").textContent = formatTime(video.currentTime) + " / " + formatTime(limit);
+      var movedFwd = Math.round(video.currentTime) - Math.round(before);
+      if (movedFwd) markSeek(1, Math.abs(movedFwd));
+      showSeekOverlay();
+      return;
+    }
+
+    /* ⏪ kończy serię ⏩: zaplanowany cel przewijania w przód wygasa */
+    state.seekGoal = 0;
+    state.seekGoalAt = 0;
+    clearTimeout(state.seekFlushTimer);
+    state.seekFlushTimer = null;
+
+    var target = Math.max(0, Math.min(limit, before - step));
     video.currentTime = target;
     if (wasEnded) {
-      var resume = video.play();
-      if (resume && resume.catch) resume.catch(function () {});
+      var resume2 = video.play();
+      if (resume2 && resume2.catch) resume2.catch(function () {});
     }
     $("playerProgress").style.width = (Math.min(video.currentTime, limit) / limit) * 100 + "%";
     $("playerTime").textContent = formatTime(video.currentTime) + " / " + formatTime(limit);
@@ -10004,7 +10100,13 @@
     /* przewijanie wysłane tylko na zwolnieniu klawisza (bez keydown): gdy
        naciśnięcie już zrobiło skok, zwolnienie tylko je kończy */
     var seekCode = event.keyCode;
-    if (seekKeyDown[seekCode]) { delete seekKeyDown[seekCode]; return; }
+    if (seekKeyDown[seekCode]) {
+      delete seekKeyDown[seekCode];
+      /* koniec serii ⏩: dograj skumulowany cel jednym wczytaniem okna — obraz
+         ląduje dokładnie tam, gdzie pokazywał licznik (patrz flushForwardSeek) */
+      flushForwardSeek();
+      return;
+    }
     var seekDirection = seekKeyDirection(seekCode, event.key, false);
     if (seekDirection) seekBy(seekDirection);
   });

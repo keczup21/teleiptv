@@ -379,11 +379,43 @@ h = harness({
   program: { start: NOW - 600000, end: NOW, title: "P" }
 });
 h.api.seekBy(1);
-check("skok do przodu poza pobrany fragment wczytuje okno od wskazanej chwili",
-  h.calls.play.length === 1 && h.calls.play[0].start === NOW - 150000 &&
-  h.calls.play[0].program.title === "P" && h.calls.play[0].screen === "playerScreen" &&
-  h.video.currentTime === 440,
+check("⏩ poza pobrany fragment: w trakcie serii okno jeszcze się nie wczytuje",
+  h.calls.play.length === 0 && h.video.currentTime === 440,
   JSON.stringify(h.calls.play));
+h.api.flushForwardSeek();
+check("⏩ poza pobrany fragment: dogranie serii wczytuje okno od wskazanej chwili",
+  h.calls.play.length === 1 && h.calls.play[0].start === NOW - 150000 &&
+  h.calls.play[0].program.title === "P" && h.calls.play[0].screen === "playerScreen",
+  JSON.stringify(h.calls.play));
+
+/* Trzymane ⏩: kroki sumują się do JEDNEGO celu, a okno wczytuje się raz — na
+   końcu serii (patrz forwardGoal / flushForwardSeek). */
+h = harness({
+  isArchive: true, duration: 2520, currentTime: 440,
+  buffered: { length: 1, end: function () { return 440; } },
+  program: { start: NOW - 600000, end: NOW, title: "P" }
+});
+h.api.seekBy(1);
+h.api.seekBy(1);
+h.api.seekBy(1);
+check("trzymane ⏩: kroki sumują się, a okno nie wczytuje się w trakcie serii",
+  h.calls.play.length === 0, JSON.stringify(h.calls.play));
+h.api.flushForwardSeek();
+check("trzymane ⏩: jedno wczytanie ląduje na sumie kroków (440 + 30 s)",
+  h.calls.play.length === 1 && h.calls.play[0].start === NOW - 130000,
+  JSON.stringify(h.calls.play));
+
+h = harness({
+  isArchive: true, duration: 2520, currentTime: 440,
+  buffered: { length: 1, end: function () { return 440; } },
+  program: { start: NOW - 600000, end: NOW, title: "P" }
+});
+h.api.seekBy(1);
+h.api.seekBy(1);
+h.api.seekBy(-1);
+h.api.flushForwardSeek();
+check("⏪ przerywa serię ⏩: zaplanowany cel wygasa, okno się nie wczytuje",
+  h.calls.play.length === 0, JSON.stringify(h.calls.play));
 
 h = harness({
   isArchive: true, duration: 2520, currentTime: 180,
