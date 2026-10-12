@@ -24,6 +24,12 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+## [3.0.10] — 2026-10-12
+
+### Poprawiono
+- **Odtwarzanie i przewijanie wróciły do stanu z 3.0.3** — świeże okno catch-up z serii 3.0.4–3.0.9 przy skoku w nagraniu psuło odtwarzanie oraz catch-up; mechanizm został usunięty w całości, więc „w przód” i „w tył” w archiwum znów działają jak w 3.0.3, a postęp listy kanałów i licznik z sekundami z 3.0.4 zostają.
+
+
 
 ## [3.0.9] — 2026-10-07
 

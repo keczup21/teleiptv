@@ -54,9 +54,6 @@ function harness(o) {
   const calls = { play: [], goLive: 0, osd: 0, error: [], osdHide: 0, timeouts: [], seek: [], painted: 0 };
   const overlay = { classList: { remove: function () {}, add: function () {} } };
   const video = { duration: o.duration, currentTime: o.currentTime || 0 };
-  /* pobrany fragment (patrz video.buffered w app.js) — gdy podany, skok poza
-     niego otwiera świeże okno catch-up od wskazanej chwili (reloadArchiveAt) */
-  if (o.buffered !== undefined) video.buffered = o.buffered;
   /* Atrapy elementów interfejsu (wpis na pasku, komunikat na środku obrazu):
      jedna atrapa na id, żeby dalo sie sprawdzic, co aplikacja na nim pokazuje. */
   const els = {};
@@ -101,7 +98,7 @@ function harness(o) {
       if (id === "video") return video;
       return stub(id);
     },
-    playChannel: function (channel, program, screen, startAtMs) { calls.play.push({ channel: channel, program: program, screen: screen, start: startAtMs }); },
+    playChannel: function (channel, program, screen) { calls.play.push({ channel: channel, program: program, screen: screen }); },
     goLive: function () { calls.goLive++; },
     showOsd: function () { calls.osd++; },
     showPlayerError: function (m) { calls.error.push(m); },
@@ -368,65 +365,6 @@ h.api.seekBy(-1);
 check("zakonczone nagranie, poczatek: nic nie przeadowuje",
   h.video.currentTime === 0 && h.calls.play.length === 0,
   "currentTime=" + h.video.currentTime);
-
-/* --- 4b. skok do przodu poza pobrany fragment --------------------------- */
-/* Catch-up podawany strumieniem bez zakresów bajtów: element <video> dociąga skok
-   tylko do końca pobranego bufora, więc skok poza bufor otwiera świeże okno
-   catch-up od wskazanej chwili (patrz seekBeyondBuffer / reloadArchiveAt). */
-h = harness({
-  isArchive: true, duration: 2520, currentTime: 440,
-  buffered: { length: 1, end: function () { return 440; } },
-  program: { start: NOW - 600000, end: NOW, title: "P" }
-});
-h.api.seekBy(1);
-check("⏩ poza pobrany fragment: w trakcie serii okno jeszcze się nie wczytuje",
-  h.calls.play.length === 0 && h.video.currentTime === 440,
-  JSON.stringify(h.calls.play));
-h.api.flushForwardSeek();
-check("⏩ poza pobrany fragment: dogranie serii wczytuje okno od wskazanej chwili",
-  h.calls.play.length === 1 && h.calls.play[0].start === NOW - 150000 &&
-  h.calls.play[0].program.title === "P" && h.calls.play[0].screen === "playerScreen",
-  JSON.stringify(h.calls.play));
-
-/* Trzymane ⏩: kroki sumują się do JEDNEGO celu, a okno wczytuje się raz — na
-   końcu serii (patrz forwardGoal / flushForwardSeek). */
-h = harness({
-  isArchive: true, duration: 2520, currentTime: 440,
-  buffered: { length: 1, end: function () { return 440; } },
-  program: { start: NOW - 600000, end: NOW, title: "P" }
-});
-h.api.seekBy(1);
-h.api.seekBy(1);
-h.api.seekBy(1);
-check("trzymane ⏩: kroki sumują się, a okno nie wczytuje się w trakcie serii",
-  h.calls.play.length === 0, JSON.stringify(h.calls.play));
-h.api.flushForwardSeek();
-check("trzymane ⏩: jedno wczytanie ląduje na sumie kroków (440 + 30 s)",
-  h.calls.play.length === 1 && h.calls.play[0].start === NOW - 130000,
-  JSON.stringify(h.calls.play));
-
-h = harness({
-  isArchive: true, duration: 2520, currentTime: 440,
-  buffered: { length: 1, end: function () { return 440; } },
-  program: { start: NOW - 600000, end: NOW, title: "P" }
-});
-h.api.seekBy(1);
-h.api.seekBy(1);
-h.api.seekBy(-1);
-h.api.flushForwardSeek();
-check("⏪ przerywa serię ⏩: zaplanowany cel wygasa, okno się nie wczytuje",
-  h.calls.play.length === 0, JSON.stringify(h.calls.play));
-
-h = harness({
-  isArchive: true, duration: 2520, currentTime: 180,
-  buffered: { length: 1, end: function () { return 440; } },
-  program: { start: NOW - 600000, end: NOW, title: "P" }
-});
-h.api.seekBy(1);
-check("skok w granicach pobranego fragmentu zostaje w tym samym oknie",
-  h.calls.play.length === 0 && h.video.currentTime === 190,
-  "currentTime=" + h.video.currentTime);
-
 
 /* --- 5. nagranie o nieznanej dlugosci ----------------------------------- */
 h = harness({ isArchive: true, duration: Infinity, currentTime: 0, program: { start: NOW - 600000, end: NOW, title: "P", timeshift: true } });

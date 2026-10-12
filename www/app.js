@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.9";
+  var APP_VERSION = "3.0.10";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -155,16 +155,6 @@
     seekAt: 0,
     seekDirection: 0,
     seekSize: 0,
-    /* przewijanie ⏩ trzymane: skumulowany cel serii w sekundach od początku okna
-       i chwila ostatniego kroku (patrz forwardGoal) oraz budzik dogrania celu po
-       zakończeniu serii (patrz scheduleForwardFlush / flushForwardSeek). Seria
-       wczytuje świeże okno RAZ, na końcu — a nie w trakcie trzymania klawisza. */
-    seekGoal: 0,
-    seekGoalAt: 0,
-    seekFlushTimer: null,
-    /* świeże okno wczytane w środku serii ⏩ to wciąż to samo przewijanie — nie
-       zeruje wpisu „Przesunięto o +N s” (patrz flushForwardSeek / playChannel) */
-    keepSeekMark: false,
     osdTimer: null,
     /* kotwica skoku w nagraniu VLC: cel ostatniego skoku i chwila zlecenia
        (patrz seekAnchorMs) */
@@ -6753,7 +6743,7 @@
     state.recentDirty = true;
   }
 
-  function playChannel(channel, program, returnScreen, startAtMs) {
+  function playChannel(channel, program, returnScreen) {
     clearTimeout(state.retryTimer);
     clearTimeout(state.stableTimer);
     /* nowy kanał nie może dostać panelu diagnostyki z poprzedniej próby
@@ -6815,25 +6805,15 @@
     state.watchProgram = program || null;
     /* Okno archiwum zaczyna się na początku programu — od tej chwili liczymy zegar
        pozycji, czyli który program z EPG leci w danym miejscu nagrania (patrz
-       watchWindowStart / syncWatchSegment). Gdy skok wypadł poza pobrany fragment,
-       wczytujemy świeże okno od wskazanej chwili (patrz reloadArchiveAt), więc
-       `startAtMs` przesuwa początek okna w głąb programu. */
-    state.watchWindowStart = program ? (startAtMs > 0 ? startAtMs : program.start) : 0;
+       watchWindowStart / syncWatchSegment). */
+    state.watchWindowStart = program ? program.start : 0;
     /* nowy kanał (albo nowe okno archiwum) = poprzednia pauza na żywo nie
        obowiązuje — inaczej „wznów” wróciłoby do starego kanału */
     state.livePauseAt = 0;
     state.lastErrorAt = 0;
     /* nowy obraz nie jest przewinięciem: kasujemy wpis o poprzednim skoku, żeby
-       „waiting” przy wczytywaniu nie pokazał go na cudzym kanale. Wyjątek: okno
-       wczytane w środku serii ⏩ (keepSeekMark) to wciąż to samo przewijanie, więc
-       licznik „Przesunięto o +N s” zostaje (patrz flushForwardSeek). Zaplanowany
-       cel serii i jego budzik gasną zawsze — nie dotyczą nowego obrazu. */
-    if (!state.keepSeekMark) clearSeekMark();
-    state.keepSeekMark = false;
-    clearTimeout(state.seekFlushTimer);
-    state.seekFlushTimer = null;
-    state.seekGoal = 0;
-    state.seekGoalAt = 0;
+       „waiting” przy wczytywaniu nie pokazał go na cudzym kanale */
+    clearSeekMark();
     destroyEngine();
 
     var source;
@@ -6853,7 +6833,7 @@
         if (after) windowEnd = Math.max(windowEnd, Math.min(after.end, Date.now()));
       }
       source = program
-        ? buildCatchupUrl(channel, state.watchWindowStart, windowEnd)
+        ? buildCatchupUrl(channel, program.start, windowEnd)
         : channel.streamUrl;
     } catch (error) {
       alert(error.message);
@@ -7167,14 +7147,12 @@
 
   /* O ile sekund bieżący program jest przesunięty w oknie (początek programu
      względem początku okna). Bez okna albo bez programu — zero, czyli dawny sposób
-     liczenia „od początku programu”. Gdy okno otwiera się w ŚRODKU programu
-     (świeże okno od wskazanej chwili — patrz reloadArchiveAt), wartość jest ujemna,
-     więc pozycja i długość patrzą od początku programu. */
+     liczenia „od początku programu”. */
   function watchSegmentOffsetSeconds() {
     if (!state.watchWindowStart) return 0;
     var program = state.watchProgram;
     if (!program) return 0;
-    return (program.start - state.watchWindowStart) / 1000;
+    return Math.max(0, (program.start - state.watchWindowStart) / 1000);
   }
 
   var syncingSegment = false;
@@ -7274,81 +7252,6 @@
     return true;
   }
 
-  /* Czy skok wypada poza to, co odtwarzacz ma już pobrane? Catch-up bywa podawany
-     strumieniem bez zakresów bajtów, więc element <video> dociąga skok tylko do
-     końca bufora (im większy skok, tym większe niedociągnięcie). Wtedy zamiast
-     skakać w tym samym oknie otwieramy świeże okno od wskazanej chwili
-     (patrz reloadArchiveAt). */
-  function seekBeyondBuffer(seconds) {
-    var video = $("video");
-    if (!video || !video.buffered || !video.buffered.length) return false;
-    return seconds > video.buffered.end(video.buffered.length - 1) + 5;
-  }
-
-  /* Świeże okno catch-up od wskazanej chwili (sekundy od początku bieżącego okna).
-     Serwer oddaje materiał zaczynający się dokładnie tam, więc obraz startuje bez
-     dalekiego skoku w pobranym fragmencie, a pasek dalej liczy od początku programu
-     (patrz watchSegmentOffsetSeconds). Świeżo wczytane okno ma wartość `rollAt`,
-     więc kilka szybkich skoków pod rząd nie wczytuje go w kółko. */
-  function reloadArchiveAt(seconds) {
-    var channel = state.watchChannel;
-    var program = state.watchProgram;
-    if (!channel || !program) return false;
-    var offset = (state.watchWindowStart || program.start) - program.start;
-    var wall = program.start + offset + Math.round(seconds * 1000);
-    var target = programAt(channel, wall) || program;
-    state.rollAt = Date.now();
-    playChannel(channel, target, "playerScreen", wall);
-    return true;
-  }
-
-  /* ---  DOGRANIE SERII ⏩: kroki sumują się do jednego celu  ---
-     Catch-up idzie strumieniem bez zakresów bajtów, więc element <video> dociąga
-     skok w przód tylko do końca pobranego fragmentu. Trzymane ⏩ sumuje więc kroki
-     do JEDNEGO celu (state.seekGoal, sekundy od początku okna), a obraz dogania go
-     świeżym oknem od tej chwili. Wczytanie robimy RAZ — gdy trzymanie się skończy,
-     a nie w trakcie serii: przeładowywanie w trakcie trzymania (jak w 3.0.5) rwało
-     obraz i psuło odtwarzanie oraz catch-up. Pojedyncze naciśnięcie to ta sama
-     droga z jednym krokiem. */
-  var FORWARD_FLUSH_MS = 500;
-
-  /* Cel serii ⏩: pierwszy krok bierze bieżącą pozycję, kolejne doliczają się do
-     celu (licznik „Przesunięto o +N s” sumuje tak samo — patrz markSeek). */
-  function forwardGoal(before, step, limit) {
-    var now = Date.now();
-    var active = state.seekGoalAt && now - state.seekGoalAt <= SEEK_GRACE;
-    var base = active ? state.seekGoal : before;
-    var goal = Math.max(0, Math.min(limit, base + step));
-    state.seekGoal = goal;
-    state.seekGoalAt = now;
-    return goal;
-  }
-
-  /* Dogranie celu serii ⏩ jednym wczytaniem świeżego okna od wskazanej chwili.
-     Wpisu „Przesunięto o +N s” nie zerujemy — seria ma jeden licznik, a nie
-     zerowanie przy każdym oknie (patrz keepSeekMark w playChannel). */
-  function flushForwardSeek() {
-    clearTimeout(state.seekFlushTimer);
-    state.seekFlushTimer = null;
-    var goal = state.seekGoal;
-    if (!goal) return;
-    state.seekGoal = 0;
-    state.seekGoalAt = 0;
-    state.keepSeekMark = true;
-    if (!reloadArchiveAt(goal)) state.keepSeekMark = false;
-  }
-
-  /* Wczytanie w środku serii ⏩ czeka, aż trzymanie się skończy: budzik zwalnia się
-     przy każdym kroku, więc odpala dopiero po ostatnim (albo na zwolnieniu
-     klawisza — patrz obsługa klawiszy). */
-  function scheduleForwardFlush() {
-    clearTimeout(state.seekFlushTimer);
-    state.seekFlushTimer = setTimeout(function () {
-      state.seekFlushTimer = null;
-      flushForwardSeek();
-    }, FORWARD_FLUSH_MS);
-  }
-
   /* Skok w bieżącym oknie archiwum na zadaną pozycję (sekundy od początku okna).
      Nie wczytuje strumienia od nowa — to zwykłe przewinięcie w tym, co już leci,
      więc obraz nie mruga. Zwraca false, gdy nie ma po czym skakać. */
@@ -7367,11 +7270,7 @@
     }
     var video = $("video");
     if (!video || !isFinite(video.duration) || video.duration <= 0) return false;
-    var target = Math.min(seconds, video.duration);
-    /* skok poza pobrany fragment: element i tak dociągnąłby go tylko do końca
-       bufora, więc otwieramy świeże okno catch-up od wskazanej chwili */
-    if (Date.now() - state.rollAt > 3000 && seekBeyondBuffer(target)) return reloadArchiveAt(target);
-    video.currentTime = target;
+    video.currentTime = Math.min(seconds, video.duration);
     var resume = video.play();
     if (resume && resume.catch) resume.catch(function () {});
     updateOsdProgress();
@@ -7535,47 +7434,10 @@
        (zatrzymany na ostatniej klatce) — skok ma go znowu puścić, żeby cofanie
        było widać, a nie zostawiało zamrożonej klatki (patrz stepToNeighbor) */
     var wasEnded = video.ended === true;
-
-    /* ⏩ w przód: kroki składają się do JEDNEGO celu, a obraz dogania go świeżym
-       oknem na KOŃCU serii (patrz forwardGoal / flushForwardSeek). Skok mieszczący
-       się w pobranym fragmencie zostaje zwykłym przewinięciem w tym, co już leci
-       (obraz nie mruga). */
-    if (direction > 0) {
-      var ahead = Math.max(0, Math.min(limit, before + step));
-      if (seekBeyondBuffer(ahead)) {
-        forwardGoal(before, step, limit);
-        markSeek(1, step);
-        showSeekOverlay();
-        updateOsdProgress();
-        scheduleForwardFlush();
-        return;
-      }
-      state.seekGoal = 0;
-      state.seekGoalAt = 0;
-      video.currentTime = ahead;
-      if (wasEnded) {
-        var resume = video.play();
-        if (resume && resume.catch) resume.catch(function () {});
-      }
-      $("playerProgress").style.width = (Math.min(video.currentTime, limit) / limit) * 100 + "%";
-      $("playerTime").textContent = formatTime(video.currentTime) + " / " + formatTime(limit);
-      var movedFwd = Math.round(video.currentTime) - Math.round(before);
-      if (movedFwd) markSeek(1, Math.abs(movedFwd));
-      showSeekOverlay();
-      return;
-    }
-
-    /* ⏪ kończy serię ⏩: zaplanowany cel przewijania w przód wygasa */
-    state.seekGoal = 0;
-    state.seekGoalAt = 0;
-    clearTimeout(state.seekFlushTimer);
-    state.seekFlushTimer = null;
-
-    var target = Math.max(0, Math.min(limit, before - step));
-    video.currentTime = target;
+    video.currentTime = Math.max(0, Math.min(limit, before + direction * step));
     if (wasEnded) {
-      var resume2 = video.play();
-      if (resume2 && resume2.catch) resume2.catch(function () {});
+      var resume = video.play();
+      if (resume && resume.catch) resume.catch(function () {});
     }
     $("playerProgress").style.width = (Math.min(video.currentTime, limit) / limit) * 100 + "%";
     $("playerTime").textContent = formatTime(video.currentTime) + " / " + formatTime(limit);
@@ -9366,12 +9228,11 @@
        wiersz idzie pierwszy. Okno o nieznanej długości (kanał na żywo) nie ma
        czego pokazywać i zostaje przy pasku programu z EPG. */
     if (state.isArchive && vlcActive() && state.vlcLength > 0) {
-      /* okno może zaczynać się w środku programu (patrz reloadArchiveAt) — wtedy
-         i pozycję, i długość liczymy od początku programu
-         (watchSegmentOffsetSeconds jest wtedy ujemne) */
-      var offsetMs = watchSegmentOffsetSeconds() * 1000;
-      var total = state.vlcLength / 1000 - offsetMs / 1000;
+      var total = state.vlcLength / 1000;
       if (programSeconds > 0) total = Math.min(total, programSeconds);
+      /* Pozycja względem początku bieżącego programu: okno może zaczynać się
+         wcześniej, gdy obejmuje kilka programów (patrz watchSegmentOffsetSeconds). */
+      var offsetMs = watchSegmentOffsetSeconds() * 1000;
       var at = Math.min(Math.max((state.vlcTime | 0) - offsetMs, 0), total * 1000);
       bar.style.width = Math.min(100, Math.max(0, (at / (total * 1000)) * 100)) + "%";
       var vlcTimeEl = $("playerTime");
@@ -9384,11 +9245,10 @@
     }
 
     if (state.isArchive && video && isFinite(video.duration) && video.duration > 0) {
-      /* jak wyżej: przy oknie zaczętym w środku programu pasek i licznik liczą
-         od początku programu (watchSegmentOffsetSeconds jest wtedy ujemne) */
-      var offset = watchSegmentOffsetSeconds();
-      var windowSeconds = video.duration - offset;
+      var windowSeconds = video.duration;
       if (programSeconds > 0) windowSeconds = Math.min(windowSeconds, programSeconds);
+      /* pozycja względem początku bieżącego programu (patrz watchSegmentOffsetSeconds) */
+      var offset = watchSegmentOffsetSeconds();
       var where = Math.min(Math.max(video.currentTime - offset, 0), windowSeconds);
       bar.style.width = (where / windowSeconds) * 100 + "%";
       var timeEl = $("playerTime");
@@ -10100,13 +9960,7 @@
     /* przewijanie wysłane tylko na zwolnieniu klawisza (bez keydown): gdy
        naciśnięcie już zrobiło skok, zwolnienie tylko je kończy */
     var seekCode = event.keyCode;
-    if (seekKeyDown[seekCode]) {
-      delete seekKeyDown[seekCode];
-      /* koniec serii ⏩: dograj skumulowany cel jednym wczytaniem okna — obraz
-         ląduje dokładnie tam, gdzie pokazywał licznik (patrz flushForwardSeek) */
-      flushForwardSeek();
-      return;
-    }
+    if (seekKeyDown[seekCode]) { delete seekKeyDown[seekCode]; return; }
     var seekDirection = seekKeyDirection(seekCode, event.key, false);
     if (seekDirection) seekBy(seekDirection);
   });
