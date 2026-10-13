@@ -74,6 +74,12 @@ public class MainActivity extends BridgeActivity {
     /* ---- odtwarzacz VLC (patrz VlcEngine) ---- */
     private VlcEngine vlcEngine;
 
+    /* Czy obraz zgasił system, gdy aplikacja schodziła w tło (patrz onStop).
+       Po powrocie wznawiamy właśnie taki obraz — pauza użytkownika zostaje
+       pauzą, a kanał zatrzymany przez system nie może zostać na jednej klatce
+       i wyglądać jak zapauzowany. */
+    private boolean pausedByStop = false;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         /* Lokalne pluginy (aktualizacja APK z GitHuba, wybor pliku M3U / EPG bez
@@ -762,17 +768,42 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /* Powrót do aplikacji: obraz, który zgasił system w onStop, wraca sam.
+       Wznawiamy tylko to, co naprawdę leciało — pauza użytkownika zostaje pauzą
+       (patrz pausedByStop). App.js dowiaduje się o tym zdarzeniem z silnika, więc
+       pasek i pilot znowu pokazują lecący obraz (patrz emitVlc, emitNative). */
+    @Override
+    public void onStart() {
+        super.onStart();
+        if (!pausedByStop) return;
+        pausedByStop = false;
+        try {
+            if (player != null) player.setPlayWhenReady(true);
+        } catch (Exception ignored) {
+        }
+        try {
+            if (vlcEngine != null) vlcEngine.setPlaying(true);
+        } catch (Exception ignored) {
+        }
+    }
+
     /* Aplikacja w tle: obraz systemowy nie może lecieć dalej pod spodem (strona
        dostaje o tym zdarzenie i zgadza się z nim co do stanu obrazu). */
     @Override
     public void onStop() {
         super.onStop();
         try {
-            if (player != null) player.setPlayWhenReady(false);
+            if (player != null && player.getPlayWhenReady()) {
+                player.setPlayWhenReady(false);
+                pausedByStop = true;
+            }
         } catch (Exception ignored) {
         }
         try {
-            if (vlcEngine != null) vlcEngine.setPlaying(false);
+            if (vlcEngine != null && vlcEngine.playing()) {
+                vlcEngine.setPlaying(false);
+                pausedByStop = true;
+            }
         } catch (Exception ignored) {
         }
     }

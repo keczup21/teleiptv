@@ -332,7 +332,7 @@ check("obsluga klawiszy rozpoznaje pole szukania",
   src.indexOf("searchArrowTarget(key, caret === 0, caretEnd === field.value.length)") > 0);
 check("pasek odtwarzacza i menu opcji wstawiaja napisy z ikona",
   (src.match(/setIconLabel\(button, label\);/g) || []).length >= 2 &&
-  src.indexOf("var paused = nativeLayerActive() ? !nativePlaying() : !!(video && video.paused);") > 0 &&
+  src.indexOf("var paused = nativeLayerActive()\n      ? (!nativePlaying() && state.engineLoading !== true)\n      : !!(video && video.paused);") > 0 &&
   src.indexOf("setIconLabel(playButton, t(paused ? \"osd_play\" : \"osd_pause\"));") > 0 &&
   src.indexOf("setIconLabel(muteButton, muteLabel())") > 0);
 check("kafelek kanalu ma sama gwiazdke ulubionych (bez przycisku „<<” na archiwum)",
@@ -3686,7 +3686,10 @@ function vlcHarness(o) {
       vlcTime: o.time | 0,
       vlcLength: o.length | 0,
       watchStart: 0,
-      startTimer: null
+      startTimer: null,
+      /* start tej proby — twardy budzet wczytania liczy sie od niego (patrz
+         VLC_CONNECT_WAIT w app.js) */
+      entryWaitStart: o.entryWaitStart || 0
     },
     t: function (key) { return "<" + key + ">"; },
     $: function (id) {
@@ -3709,6 +3712,9 @@ function vlcHarness(o) {
     clearStartWatchdog: function () { sandbox.state.startTimer = null; },
     setTimeout: function (fn) { calls.timers.push(fn); return calls.timers.length; },
     clearTimeout: function () {},
+    /* Budziki patrza na to, czy strumien naprawde cos dociaga (patrz
+       streamStillComing w app.js) — w atrapie mowi o tym test. */
+    streamStillComing: function () { return o.stillComing === true; },
     /* przezroczystosc strony i zgaszenie <video> — to samo, co robi blok
        odtwarzacza systemowego (patrz markExoMode i clearVideoQuietly w app.js) */
     markExoMode: function (on) {
@@ -3787,6 +3793,33 @@ vh.fire();
 check("VLC: dzwiek bez klatki po budzetach oddaje kanal kolejce",
   vh.calls.errors.length === 1 && vh.calls.errors[0].indexOf("<err_no_picture>") > 0,
   JSON.stringify(vh.calls.errors));
+
+/* Kanal, ktory naprawde sie wczytuje (VLC donosi buforowanie i zegar obrazu —
+   patrz vlcEvent), nie moze byc ucięty po pierwszym VLC_START_WAIT: wtedy na
+   ekranie pojawial sie blad silnika, ktory nic zlego nie zrobil, a kanal
+   startowal od nowa inna droga (patrz armVlcWatchdog, streamStillComing). */
+vh = vlcHarness({ stillComing: true, entryWaitStart: Date.now() });
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+vh.fire();
+check("VLC: wczytujacy sie kanal nie jest ucinany po pierwszym budziku",
+  vh.calls.errors.length === 0 && vh.calls.timers.length === 1,
+  JSON.stringify(vh.calls.errors));
+
+/* Twardy budzet (VLC_CONNECT_WAIT) konczy czekanie: kanal, ktory mimo ruchu w
+   strumieniu nie ruszyl przez kilkadziesiat sekund, oddaje sprawe kolejce. */
+vh = vlcHarness({ stillComing: true, entryWaitStart: Date.now() - 25000 });
+vh.api.startVlcSource({ engine: "vlc", url: "http://s/live/4k.ts" });
+vh.fire();
+check("VLC: twardy budzet konczy czekanie na kanal, ktory nie ruszyl",
+  vh.calls.errors.length === 1 && vh.calls.errors[0].indexOf("<engine_vlc>") > 0,
+  JSON.stringify(vh.calls.errors));
+
+/* Pusty element <video> nie opisuje kanalu rysowanego przez silnik sprzetowy:
+   jego blad nie moze wywrocic tego silnika, a jego buforowanie nie moze
+   meldowac bledu o nazwie silnika (patrz clearVideoQuietly, nativeLayerActive). */
+check("VLC: pusty <video> nie wywraca silnika sprzetowego",
+  src.indexOf("if (nativeLayerActive() || !video.src) return;") > 0 &&
+  src.indexOf("if (nativeLayerActive()) return;\n      /* chwilę po przewinięciu") > 0);
 
 /* Pauza i wyciszenie ida mostem, a nie elementem <video>. */
 vh = vlcHarness({ playing: true });

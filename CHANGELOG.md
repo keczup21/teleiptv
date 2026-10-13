@@ -24,6 +24,14 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+## [3.0.11] — 2026-10-13
+
+### Poprawiono
+- **Kanał nie wita się już jako „zapauzowany”** — przycisk na pasku pokazywał „⏵ Wznów”, gdy obraz silnika odbiornika (VLC albo odtwarzacz systemowy) dopiero się włączał, choć nikt tego kanału nie zatrzymał.
+- **Obraz wraca do grania po powrocie do aplikacji** — kanał zgaszony, gdy aplikacja schodziła w tło, wznawia się sam, zamiast zostać na jednej klatce; pauza ustawiona pilotem zostaje pauzą.
+- **Wczytujący się kanał nie jest już przerywany błędem VLC** — dopóki silnik donosi, że dociąga dane, próba trwa dłużej (do 20 s), więc wolny kanał nie dostaje komunikatu o błędzie i nie startuje od nowa inną drogą.
+- **Start kanału bez zbędnych komunikatów i przełączeń** — pusty element odtwarzacza strony nie melduje już „Ładowania strumienia” z nazwą silnika ani nie wywraca silnika odbiornika, który w tej chwili rysuje obraz.
+
 ## [3.0.10] — 2026-10-12
 
 ### Poprawiono

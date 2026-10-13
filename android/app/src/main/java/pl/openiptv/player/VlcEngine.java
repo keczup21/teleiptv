@@ -582,6 +582,17 @@ class VlcEngine {
         }
     }
 
+    /* Czy silnik w tej chwili odtwarza — most pyta o to, gdy aplikacja schodzi
+       w tło, żeby nie wznowić po powrocie kanału, którego użytkownik sam nie
+       zatrzymał (patrz onStop / onStart w MainActivity). */
+    boolean playing() {
+        try {
+            return player != null && player.isPlaying();
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
     void setMuted(boolean muted) {
         try {
             if (player != null) player.setVolume(muted ? 0 : 100);

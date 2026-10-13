@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.10";
+  var APP_VERSION = "3.0.11";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -4067,6 +4067,12 @@
     /* buforowanie: pasek mówi wprost, co się dzieje i który silnik pracuje */
     video.addEventListener("waiting", function () {
       if (!state.currentSource) return;
+      /* Obraz rysuje warstwa sprzętowa (VLC albo odtwarzacz systemowy), a wtedy
+         element <video> jest pusty i jego „buforowanie” nic nie mówi o kanale
+         (patrz clearVideoQuietly). Bez tego przy każdym włączeniu kanału pojawiał
+         się komunikat z nazwą silnika, który akurat stał na czele kolejki prób —
+         choć nic złego się nie działo (patrz engineName, vlcEvent). */
+      if (nativeLayerActive()) return;
       /* chwilę po przewinięciu dekoder donosi obraz na nową pozycję — to nie
          jest wczytywanie strumienia od zera, więc pasek pokazuje skok
          („Cofnięto o 10 s”), a nie „Ładowanie strumienia…” */
@@ -4127,6 +4133,11 @@
     });
 
     video.addEventListener("error", function () {
+      /* Pusty element <video> (droga sprzętowa gasi go — patrz clearVideoQuietly)
+         potrafi zameldować błąd, choć nie ma żadnego źródła. Taki meldunek nie
+         dotyczy kanału i nie może wywrócić silnika, który właśnie go rysuje —
+         błąd bez źródła to nie błąd strumienia. */
+      if (nativeLayerActive() || !video.src) return;
       markWatchedTime();
       clearTimeout(state.recentTimer);
       /* jeden błąd = jedno przejście do następnego silnika (błąd potrafi dublować) */
@@ -5924,6 +5935,12 @@
 
   var VLC_START_WAIT = 9000;         /* ile czekamy, aż obraz VLC ruszy */
   var VLC_PICTURE_WAIT = 6000;       /* dźwięk gra, a klatek nie ma */
+  /* Twardy budżet na samo wczytanie kanału, liczony od startu próby: dopóki VLC
+     donosi, że coś dociąga, próba trwa dłużej niż jedno VLC_START_WAIT — a kanał,
+     który naprawdę zamilkł, oddaje sprawę kolejce od razu (patrz
+     streamStillComing). Bez tego wolny kanał był ucinany w połowie wczytywania
+     i startował od nowa inną drogą. */
+  var VLC_CONNECT_WAIT = 20000;
 
   /* Most do silnika VLC: jest tylko w aplikacji na Androidzie i tylko wtedy, gdy
      w paczce są biblioteki dla architektury tego odbiornika (patrz VlcEngine). */
@@ -6077,6 +6094,9 @@
     if (type === "time") {
       state.vlcTime = Math.max(0, event.time | 0);
       if ((event.length | 0) > 0) state.vlcLength = event.length | 0;
+      /* Zegar silnika to dowód, że dane naprawdę dochodzą: wczytujący się kanał
+         nie może zostać uznany za martwy (patrz armVlcWatchdog) */
+      noteStreamActivity();
       /* cofnięty program otwiera się na swoim końcu — pierwszy raz, gdy znamy
          długość okna, przeskakujemy przed koniec programu z EPG (patrz
          stepToNeighbor i seekToProgramEnd) */
@@ -6125,7 +6145,14 @@
       updateOsd();
       return;
     }
-    if (type === "buffering" || type === "stopped") return;
+    if (type === "buffering") {
+      /* VLC donosi, że dociąga dane — kanał się wczytuje, a nie stoi. To ten sam
+         dowód, którym posługują się budziki drogi <video> (patrz
+         streamStillComing, armVlcWatchdog). */
+      noteStreamActivity();
+      return;
+    }
+    if (type === "stopped") return;
     if (type === "ended") {
       /* koniec nagrania — idziemy do następnego programu (patrz rollArchiveAtEnd) */
       rollArchiveAtEnd(true);
@@ -6147,6 +6174,18 @@
       state.startTimer = null;
       if (!state.watchChannel || state.engineToken !== token || !vlcActive()) return;
       if (!state.vlcPlaying) {
+        /* VLC jeszcze nie zaczął, ale strumień naprawdę coś robi (buforowanie,
+           zegar obrazu — patrz noteStreamActivity w vlcEvent): wolny kanał nie
+           może zostać ucięty w połowie wczytywania, bo wtedy na ekranie pojawia
+           się błąd silnika, który nic złego nie zrobił, a kanał startuje od nowa
+           inną drogą — czyli dokładnie to, po co ta droga istnieje. Ta sama
+           zasada, co na drodze <video> (patrz streamStillComing,
+           armPictureWatchdogIn), a twardy budżet VLC_CONNECT_WAIT kończy
+           czekanie na kanał, który zamilkł. */
+        if (streamStillComing() && Date.now() - (state.entryWaitStart || 0) < VLC_CONNECT_WAIT) {
+          armVlcWatchdog(token, VLC_START_WAIT);
+          return;
+        }
         handlePlaybackError(t("err_stream") + " (" + engineName("vlc") + ")");
         return;
       }
@@ -9186,8 +9225,14 @@
     var bar = $("playerActions");
     var playButton = bar ? bar.querySelector('[data-osd="play"]') : null;
     /* Obraz systemowy i VLC nie mają elementu <video> — czy obraz jest zatrzymany,
-       mówi most (patrz state.exoPlaying / state.vlcPlaying), a nie video.paused. */
-    var paused = nativeLayerActive() ? !nativePlaying() : !!(video && video.paused);
+       mówi most (patrz state.exoPlaying / state.vlcPlaying), a nie video.paused.
+       Kanał, który dopiero się wczytuje, nie jest jednak zapauzowany: silnik
+       sprzętowy zgłasza grę dopiero wtedy, gdy obraz ruszy (patrz engineLoading
+       w startVlcSource), a przez ten czas przycisk mówił „⏵ Wznów” — czyli
+       aplikacja twierdziła, że ktoś ten kanał zatrzymał. */
+    var paused = nativeLayerActive()
+      ? (!nativePlaying() && state.engineLoading !== true)
+      : !!(video && video.paused);
     if (playButton) setIconLabel(playButton, t(paused ? "osd_play" : "osd_pause"));
     var muteButton = bar ? bar.querySelector('[data-osd="mute"]') : null;
     if (muteButton) setIconLabel(muteButton, muteLabel());
