@@ -460,6 +460,39 @@ check("nagranie VLC, most milczy: zostaje pasek z informacja",
   h.calls.osd === 1 && h.calls.seek.length === 1 && h.calls.play.length === 0,
   JSON.stringify(h.calls));
 
+/* Trzymanie klawisza: pilot powtarza naciśnięcie kilkadziesiąt razy na sekundę,
+   a każde z nich dolicza krok do licznika. Gdyby każde szło osobno do silnika,
+   VLC dostawałoby kilkadziesiąt zleceń naraz i liczyło skok od miejsca, w którym
+   obraz jeszcze jest — po doliczeniu +300 s obraz stawał w połowie drogi, raz
+   tak, raz inaczej (patrz vlcSeekStep / flushVlcSeek w app.js). */
+h = harness({ isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000 });
+h.api.seekBy(1); h.api.seekBy(1); h.api.seekBy(1); h.api.seekBy(1);
+check("trzymanie ⏩ nie zalewa silnika: jedno zlecenie naraz",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 310000,
+  JSON.stringify(h.calls.seek));
+check("licznik dolicza kroki, choć zlecenie czeka w kolejce",
+  h.api.state.seekSize === 40 && h.api.state.vlcSeekWant === 340000 &&
+  h.api.state.vlcTime === 340000,
+  JSON.stringify({ size: h.api.state.seekSize, want: h.api.state.vlcSeekWant }));
+
+/* silnik donosi, że skok się wykonał (patrz vlcEvent w app.js) — wtedy idzie
+   jeden sumaryczny cel, a nie cztery zaległe zlecenia */
+h.api.state.vlcEngineTime = 310200;
+h.calls.timeouts.splice(0).forEach(function (t) { t.fn(); });
+check("po potwierdzeniu silnika idzie sumaryczny cel",
+  h.calls.seek.length === 2 && h.calls.seek[1] === 340000,
+  JSON.stringify(h.calls.seek));
+
+/* strumień, który skoków nie potwierdza (silnik milczy): zlecenie i tak idzie,
+   żeby licznik nie został sam bez obrazu (patrz VLC_SEEK_WAIT) */
+h = harness({ isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000 });
+h.api.seekBy(1); h.api.seekBy(1);
+h.api.state.vlcSeekAt = NOW - 3000;
+h.api.seekBy(1);
+check("gdy silnik milczy, po budżecie kolejka i tak wysyła cel",
+  h.calls.seek.length === 2 && h.calls.seek[1] === 330000,
+  JSON.stringify(h.calls.seek));
+
 /* --- 6. pauza i wznowienie kanalu na zywo (pilot: pauza, play) ---------- */
 let z;
 h = ctrlHarness({ isArchive: false, paused: false, epg: { title: "Wiadomosci" } });

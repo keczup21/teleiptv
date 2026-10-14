@@ -3846,9 +3846,16 @@ check("VLC: pozycja i dlugosc okna nagrania przychodza z mostu",
 vh.api.vlcEvent({ type: "time", time: 50000 });
 check("VLC: zdarzenie bez dlugosci nie kasuje znanego okna nagrania",
   vh.api.state.vlcTime === 50000 && vh.api.state.vlcLength === 5400000);
+/* Silnik donosi swoja pozycje osobno od wpisu optymistycznego skoku (patrz
+   vlcSeek): po niej kolejka skoku poznaje, ze zlecenie sie wykonalo (patrz
+   flushVlcSeek w app.js). */
+check("VLC: pozycja doniesiona przez silnik idzie osobno od wpisu skoku",
+  vh.api.state.vlcEngineTime === 50000, String(vh.api.state.vlcEngineTime));
 check("VLC: skok o krok idzie metoda mostu i rusza paskiem od razu",
   vh.api.vlcSeek(19000) === true && vh.calls.times.join(",") === "19000" &&
   vh.api.state.vlcTime === 19000, JSON.stringify(vh.calls.times));
+check("VLC: wpis optymistyczny skoku nie udaje slowa silnika",
+  vh.api.state.vlcEngineTime === 50000, String(vh.api.state.vlcEngineTime));
 vh.api.vlcEvent({ type: "time", time: -5 });
 check("VLC: pozycja z silnika nie schodzi ponizej zera", vh.api.state.vlcTime === 0);
 check("VLC: skok w tyl tez idzie do mostu (ujemna pozycja przycieta do zera)",
@@ -3857,6 +3864,13 @@ check("VLC: skok w tyl tez idzie do mostu (ujemna pozycja przycieta do zera)",
 vh.api.stopVlc();
 check("VLC: zamkniecie obrazu zeruje zegar silnika",
   vh.api.state.vlcTime === 0 && vh.api.state.vlcLength === 0);
+check("VLC: zamkniecie obrazu gasi kolejke skoku",
+  vh.api.state.vlcEngineTime === 0 && vh.api.state.vlcSeekWant === null &&
+  vh.api.state.vlcSeekSent === null && vh.api.state.vlcSeekTimer === null,
+  JSON.stringify({
+    engine: vh.api.state.vlcEngineTime, want: vh.api.state.vlcSeekWant,
+    sent: vh.api.state.vlcSeekSent, timer: vh.api.state.vlcSeekTimer
+  }));
 vh = vlcHarness({ noBridge: true });
 check("VLC: bez mostu nie ma czym przewijac (skok zglasza porazke)",
   vh.api.vlcSeek(5000) === false);
