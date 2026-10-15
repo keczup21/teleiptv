@@ -139,6 +139,21 @@ function harness(o) {
   return { api: sandbox, calls: calls, video: video, els: els };
 }
 
+/* Budziki kolejki skoku w rękach testu (atrapa setTimeout wyżej): uruchamiamy je
+   po kolei, tak jak zrobiłby to zegar aplikacji. */
+function runTimers(h) {
+  h.calls.timeouts.splice(0).forEach(function (t) { t.fn(); });
+}
+
+/* Doniesienie zegara obrazu z silnika (patrz vlcEvent w app.js): pozycja, licznik
+   doniesień i domknięcie pętli skoku (patrz vlcSeekCheck). Bloku vlcEvent nie ma
+   w wyciętym źródle, więc test podaje to sam. */
+function engineReport(h, ms) {
+  h.api.state.vlcEngineTime = ms;
+  h.api.state.vlcClock = (h.api.state.vlcClock | 0) + 1;
+  return h.api.vlcSeekCheck();
+}
+
 /* Otoczenie dla bloku sterowania obrazem: obraz (pauza, wyciszenie) + decyzje
    o wznowieniu na kanale na zywo (catch-up) i w archiwum. */
 function ctrlHarness(o) {
@@ -461,36 +476,97 @@ check("nagranie VLC, most milczy: zostaje pasek z informacja",
   JSON.stringify(h.calls));
 
 /* Trzymanie klawisza: pilot powtarza naciśnięcie kilkadziesiąt razy na sekundę,
-   a każde z nich dolicza krok do licznika. Gdyby każde szło osobno do silnika,
-   VLC dostawałoby kilkadziesiąt zleceń naraz i liczyło skok od miejsca, w którym
-   obraz jeszcze jest — po doliczeniu +300 s obraz stawał w połowie drogi, raz
-   tak, raz inaczej (patrz vlcSeekStep / flushVlcSeek w app.js). */
+   a każde z nich dolicza krok do licznika. Jeden gest pilota to jeden skok obrazu:
+   pierwsze naciśnięcie idzie do silnika od razu, a trzymany klawisz tylko dolicza
+   cel — zlecenie czeka na koniec gestu (patrz vlcSeekStep / VLC_SEEK_QUIET). */
 h = harness({ isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000 });
+engineReport(h, 300000);                     /* silnik donosi, gdzie jest obraz */
 h.api.seekBy(1); h.api.seekBy(1); h.api.seekBy(1); h.api.seekBy(1);
 check("trzymanie ⏩ nie zalewa silnika: jedno zlecenie naraz",
   h.calls.seek.length === 1 && h.calls.seek[0] === 310000,
   JSON.stringify(h.calls.seek));
-check("licznik dolicza kroki, choć zlecenie czeka w kolejce",
+check("licznik dolicza kroki, a gest trzymania czeka na koniec",
   h.api.state.seekSize === 40 && h.api.state.vlcSeekWant === 340000 &&
-  h.api.state.vlcTime === 340000,
-  JSON.stringify({ size: h.api.state.seekSize, want: h.api.state.vlcSeekWant }));
+  h.api.state.vlcSeekGoal === 340000 && h.api.state.vlcTime === 340000 &&
+  h.api.state.vlcSeekHold === true,
+  JSON.stringify({ size: h.api.state.seekSize, want: h.api.state.vlcSeekWant,
+    hold: h.api.state.vlcSeekHold }));
 
-/* silnik donosi, że skok się wykonał (patrz vlcEvent w app.js) — wtedy idzie
-   jeden sumaryczny cel, a nie cztery zaległe zlecenia */
-h.api.state.vlcEngineTime = 310200;
-h.calls.timeouts.splice(0).forEach(function (t) { t.fn(); });
+/* Pilot puścił klawisz (budzik kolejki — patrz VLC_SEEK_QUIET), a silnik doniósł,
+   że skok o 10 s przełożył się na 10 s obrazu. Wtedy idzie jeden sumaryczny cel,
+   a nie cztery zaległe zlecenia. */
+runTimers(h);
+h.api.state.vlcSeekAt = NOW - 2000;          /* od zlecenia minęło VLC_SEEK_CONFIRM */
+engineReport(h, 310000);
+engineReport(h, 310200);
+engineReport(h, 310400);
+engineReport(h, 310600);
+runTimers(h);
 check("po potwierdzeniu silnika idzie sumaryczny cel",
-  h.calls.seek.length === 2 && h.calls.seek[1] === 340000,
+  h.calls.seek.length === 2 && h.api.state.vlcSeekGoal === 340000 &&
+  h.calls.seek[1] > 330000 && h.calls.seek[1] <= 340000,
   JSON.stringify(h.calls.seek));
 
 /* strumień, który skoków nie potwierdza (silnik milczy): zlecenie i tak idzie,
    żeby licznik nie został sam bez obrazu (patrz VLC_SEEK_WAIT) */
 h = harness({ isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000 });
-h.api.seekBy(1); h.api.seekBy(1);
-h.api.state.vlcSeekAt = NOW - 3000;
-h.api.seekBy(1);
+h.api.seekBy(1);                             /* zlecenie idzie od razu: 310000 */
+h.api.seekBy(1);                             /* trzymany klawisz dolicza cel: 320000 */
+h.api.state.vlcSeekAt = NOW - 3000;          /* minął budżet, a silnik wciąż milczy */
+runTimers(h);
 check("gdy silnik milczy, po budżecie kolejka i tak wysyła cel",
-  h.calls.seek.length === 2 && h.calls.seek[1] === 330000,
+  h.calls.seek.length === 2 && h.calls.seek[1] === 320000,
+  JSON.stringify(h.calls.seek));
+
+/* --- 5c. skok VLC trafia w cel: domknięcie pętli (zgłoszenie z kanapy) ---- */
+/* W nagraniu bez indeksu strumienia VLC liczy drogę do celu z oszacowanej długości
+   nagrania i przy zaniżonym oszacowaniu przechodzi tylko część drogi — ⏩ z 5. minuty
+   o 10 minut lądowało na 9. Dlatego kolejka patrzy, gdzie silnik naprawdę stanął,
+   mierzy z tego skalę przewijania tego strumienia i dociąga cel
+   (patrz vlcSeekAim / vlcSeekSettle w app.js). */
+h = harness({ isArchive: true, vlc: true, vlcTime: 300000, vlcLength: 5400000 });
+engineReport(h, 300000);                     /* silnik donosi: 5. minuta */
+h.api.seekBy(1);
+check("skok VLC: bez zmierzonej skali pierwsze zlecenie prosi o sam cel",
+  h.calls.seek.length === 1 && h.calls.seek[0] === 310000, JSON.stringify(h.calls.seek));
+
+/* Silnik donosi, gdzie naprawdę stanął: skok o 10 s dał 4,6 s obrazu (zegar wrócił
+   do grania obrazu — patrz VLC_SEEK_HOLD) */
+h.api.state.vlcSeekAt = NOW - 2000;
+engineReport(h, 300000);
+engineReport(h, 304000);
+engineReport(h, 304200);
+engineReport(h, 304400);
+engineReport(h, 304600);
+check("skok VLC: zmierzona skala przewijania zostaje w pamięci kanału",
+  h.api.state.vlcSeekGain > 0.4 && h.api.state.vlcSeekGain < 0.5,
+  String(h.api.state.vlcSeekGain));
+check("skok VLC: licznik trzyma cel pilota, a nie miejsce, w którym stanął obraz",
+  h.api.state.vlcTime === 310000 && h.api.state.vlcPendingSeek === 310000,
+  JSON.stringify({ time: h.api.state.vlcTime, pending: h.api.state.vlcPendingSeek }));
+runTimers(h);
+check("skok VLC: kolejka dociąga cel z poprawką skali (żądanie dalej niż cel)",
+  h.calls.seek.length === 2 && h.calls.seek[1] > 310000 && h.calls.seek[1] < 340000 &&
+  h.api.state.vlcTime === 310000,
+  JSON.stringify(h.calls.seek));
+
+/* obraz doszedł do celu: pętla się kończy, kolejka pusta */
+h.api.state.vlcSeekAt = NOW - 2000;
+engineReport(h, 310000);
+engineReport(h, 310200);
+engineReport(h, 310400);
+engineReport(h, 310600);
+check("skok VLC: obraz doszedł do celu — kolejka pusta, bez dalszych zleceń",
+  h.calls.seek.length === 2 && h.api.state.vlcSeekWant === null &&
+  h.api.state.vlcSeekGoal === null && h.api.state.vlcPendingSeek === 0,
+  JSON.stringify({ seek: h.calls.seek, want: h.api.state.vlcSeekWant }));
+
+/* Ten sam kanał, kolejny ⏩: zmierzona skala jest już znana, więc obraz dochodzi
+   do celu od pierwszego zlecenia — jedno lądowanie, bez dociągania. */
+h.api.seekBy(1);
+check("skok VLC: znana skala trafia od pierwszego zlecenia (jedno lądowanie)",
+  h.calls.seek.length === 3 && h.calls.seek[2] > 320000 && h.calls.seek[2] < 340000 &&
+  h.api.state.vlcTime === 320000,
   JSON.stringify(h.calls.seek));
 
 /* --- 6. pauza i wznowienie kanalu na zywo (pilot: pauza, play) ---------- */
@@ -1052,6 +1128,152 @@ h.api.playChannel(CH, PROG_A, "playerScreen");
 check("nastepny program ciagle leci: okno konczy sie na teraz",
   h.calls.catchup.length === 1 && h.calls.catchup[0][1] === NOW,
   JSON.stringify(h.calls.catchup));
+
+/* --- 7. pasek odtwarzania nie przelicza ukladu bez potrzeby -----------------
+   updateOsdProgress() wola sie z kilku zrodel naraz: z zegara silnika (VLC
+   donosi pozycje kilka razy na sekunde), z timeupdate elementu <video>, z zegara
+   paska (raz na sekunde) i po kazdym skoku. Pasek i licznik zmieniaja sie jednak
+   co najwyzej raz na sekunde, wiec zapis do strony idzie tylko wtedy, gdy naprawde
+   jest co pokazac — inaczej kazdy takt kazalby przegladarce na nowo przeliczac
+   uklad paska na obrazie (widoczne szarpanie na Android TV — patrz osdProgressKey).
+   Sprawdzamy to na wycietym z app.js kodzie, liczac zapisy do atrap paska. */
+const OSD_CODE = sliceFn("updateOsdProgress");
+
+/* procent szerokości paska z atrapy: porównujemy liczbowo, bo zapis idzie
+   ułamkiem („16.666666666666664%”) i nie warto wiązać testu z jego zapisem */
+function percent(width) {
+  return Math.round(parseFloat(width) * 10) / 10;
+}
+
+function osdHarness(o) {
+  o = o || {};
+  const writes = { width: 0, time: 0, remain: 0 };
+  const bar = { style: {} };
+  /* zapis do atrapy liczymy: tylko prawdziwa zmiana szerokosci paska ma ruszyc strone */
+  Object.defineProperty(bar.style, "width", {
+    get: function () { return this._width || ""; },
+    set: function (value) { this._width = value; writes.width++; }
+  });
+  const timeEl = {};
+  Object.defineProperty(timeEl, "textContent", {
+    get: function () { return this._text || ""; },
+    set: function (value) { this._text = value; writes.time++; }
+  });
+  const video = { currentTime: o.currentTime || 0, duration: o.duration };
+  const sandbox = {
+    state: {
+      isArchive: o.isArchive === true,
+      watchChannel: CH,
+      vlcTime: o.vlcTime | 0,
+      vlcLength: o.vlcLength | 0,
+      watchWindowStart: o.watchWindowStart || 0,
+      watchProgram: o.program || null
+    },
+    osdVisible: function () { return o.hidden !== true; },
+    $: function (id) {
+      if (id === "playerProgress") return bar;
+      if (id === "playerTime") return timeEl;
+      if (id === "video") return video;
+      return null;
+    },
+    syncWatchSegment: function () {},
+    archiveProgramSeconds: function () { return o.programSeconds || 0; },
+    watchSegmentOffsetSeconds: function () { return o.watchOffset || 0; },
+    vlcActive: function () { return o.vlc === true; },
+    isMuted: function () { return o.muted === true; },
+    formatTime: function (s) { return String(Math.floor(s)); },
+    t: function (key) { return key; },
+    setOsdRemain: function () { writes.remain++; },
+    currentProgram: function () { return o.epg || null; },
+    Date: { now: function () { return NOW; } }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(OSD_CODE, sandbox);
+  return { api: sandbox, writes: writes, bar: bar, timeEl: timeEl, video: video };
+}
+
+/* nagranie z obrazem silnika (VLC): zegar donosi te sama pozycje kilka razy */
+h = osdHarness({ isArchive: true, vlc: true, vlcLength: 3600000, vlcTime: 600000 });
+h.api.updateOsdProgress();
+h.api.updateOsdProgress();
+h.api.updateOsdProgress();
+check("ta sama pozycja z silnika: pasek i licznik zapisane raz",
+  h.writes.width === 1 && h.writes.time === 1 && h.writes.remain === 1 &&
+  percent(h.bar.style.width) === 16.7,
+  JSON.stringify({ writes: h.writes, width: h.bar.style.width }));
+
+h.api.state.vlcTime = 601000;
+h.api.updateOsdProgress();
+check("nowa pozycja z silnika rusza pasek",
+  h.writes.width === 2 && h.writes.time === 2 && percent(h.bar.style.width) === 16.7,
+  JSON.stringify({ writes: h.writes, width: h.bar.style.width }));
+
+h.api.state.vlcTime = 601400;
+h.api.updateOsdProgress();
+check("pozycja w tej samej sekundzie nie rusza paska drugi raz",
+  h.writes.width === 2, JSON.stringify(h.writes));
+
+h.api.state.vlcTime = 602000;
+h.api.updateOsdProgress();
+check("nastepna sekunda z silnika znowu rusza pasek",
+  h.writes.width === 3, JSON.stringify(h.writes));
+
+h.api.state.vlcTime = 602000;
+h.api.state.vlcLength = 1800000;
+h.api.updateOsdProgress();
+check("inne okno nagrania (nowy program) rusza pasek mimo tej samej pozycji",
+  h.writes.width === 4, JSON.stringify(h.writes));
+
+/* nagranie w elemencie <video>: timeupdate donosi pozycje kilka razy na sekunde */
+h = osdHarness({ isArchive: true, duration: 3600, currentTime: 100.2 });
+h.api.updateOsdProgress();
+h.api.updateOsdProgress();
+check("ta sama sekunda obrazu w <video> to jeden zapis paska",
+  h.writes.width === 1, JSON.stringify(h.writes));
+
+h.video.currentTime = 100.9;
+h.api.updateOsdProgress();
+check("ta sama sekunda obrazu w <video> (z przecinkiem) nadal bez zapisu",
+  h.writes.width === 1, JSON.stringify(h.writes));
+
+h.video.currentTime = 101.05;
+h.api.updateOsdProgress();
+check("nowa sekunda obrazu w <video> rusza pasek i licznik",
+  h.writes.width === 2 && h.timeEl.textContent === "101 / 3600",
+  JSON.stringify({ writes: h.writes, time: h.timeEl.textContent }));
+
+/* licznik nie może „zamarznąć”: zmiana sekundy musi wypaść dokładnie wtedy, gdy
+   zmienia się licznik (formatTime zaokrągla w dół), a nie pół sekundy wcześniej */
+h.video.currentTime = 101.4;
+h.api.updateOsdProgress();
+check("licznik pokazuje sekunde obrazu, a nie zaokrągloną w górę",
+  h.timeEl.textContent === "101 / 3600" && h.writes.width === 2,
+  JSON.stringify({ writes: h.writes, time: h.timeEl.textContent }));
+
+/* kanal na zywo: pasek programu z EPG tez idzie tylko przy zmianie.
+   Zegar w atrapie stoi (Date.now), wiec druga proba nie rusza juz paska. */
+h = osdHarness({ epg: { start: NOW - 600000, end: NOW + 600000 } });
+h.api.updateOsdProgress();
+h.api.updateOsdProgress();
+check("zywy kanal: pasek zapisany raz, dopoki zegar stoi",
+  h.writes.width === 1 && h.writes.remain === 1, JSON.stringify(h.writes));
+
+/* pasek zamkniety: zapis w ogole nie trafia na strone */
+h = osdHarness({ hidden: true, isArchive: true, vlc: true, vlcLength: 3600000, vlcTime: 600000 });
+h.api.updateOsdProgress();
+check("zamkniety pasek nie zapisuje niczego",
+  h.writes.width === 0 && h.writes.time === 0 && h.writes.remain === 0,
+  JSON.stringify(h.writes));
+
+/* ponowne otwarcie paska ma dac pelny zapis, choćby pozycja sie nie zmienila:
+   hideOsd() zeruje pamiec zapisu (patrz osdProgressKey) */
+h = osdHarness({ isArchive: true, vlc: true, vlcLength: 3600000, vlcTime: 600000 });
+h.api.updateOsdProgress();
+h.api.updateOsdProgress();
+h.api.state.osdProgressKey = "";
+h.api.updateOsdProgress();
+check("po ponownym otwarciu paska zapis idzie od nowa",
+  h.writes.width === 2, JSON.stringify(h.writes));
 
 console.log("");
 if (fails) { console.log("BLEDY: " + fails); process.exit(1); }

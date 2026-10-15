@@ -26,7 +26,7 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.12";
+  var APP_VERSION = "3.0.13";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -169,6 +169,12 @@
        „wstecz” biegło dalej w tył, a nie odbijało z powrotem */
     rewindEnd: false,
     osdTicker: null,
+    /* Ostatnio zapisany stan paska postępu (pasek, licznik, „do końca”). Pasek
+       i licznik zmieniają się raz na sekundę, a zegar silnika donosi pozycję
+       cztery razy na sekundę — bez tego każdy takt kazałby przeglądarce na nowo
+       przeliczać układ paska na obrazie (patrz updateOsdProgress). Zerowane przy
+       zamknięciu paska, żeby po ponownym otwarciu zapis był pełny. */
+    osdProgressKey: "",
     /* Pasek otwarty klawiszem OK / dotknięciem to menu: ▲ ▼ chodzą wtedy po jego
        przyciskach („Pauza”, „EPG”, …), a nie po kanałach. Pasek pokazany przy
        zmianie kanału albo skoku to tylko informacja — wtedy ▲ ▼ z obrazu dalej
@@ -263,6 +269,18 @@
     vlcSeekSent: null,
     vlcSeekAt: 0,
     vlcSeekTimer: null,
+    /* Domykanie pętli skoku (patrz vlcSeekSettle): cel, o który prosił pilot
+       (żądamy go do skutku), od jakiej pozycji silnika liczymy skalę przewijania
+       tego strumienia, ile doniesień zegara już było, ile razy dociągaliśmy obraz
+       do celu i czy pilot trzyma jeszcze klawisz. */
+    vlcSeekGoal: null,
+    vlcSeekFrom: null,
+    vlcSeekPrev: null,
+    vlcSeekSteady: 0,
+    vlcSeekTries: 0,
+    vlcSeekGain: 0,
+    vlcSeekHold: false,
+    vlcClock: 0,
     /* blokada zdarzeń przewijania listy (rysujemy jedną porcję na raz) */
     listScrollLock: false
   };
@@ -6096,6 +6114,16 @@
     state.vlcSeekWant = null;
     state.vlcSeekSent = null;
     state.vlcSeekAt = 0;
+    /* domykanie pętli skoku: zmierzona skala przewijania należy do zamkniętego
+       okna nagrania (patrz vlcSeekSettle) */
+    state.vlcSeekGoal = null;
+    state.vlcSeekFrom = null;
+    state.vlcSeekPrev = null;
+    state.vlcSeekSteady = 0;
+    state.vlcSeekTries = 0;
+    state.vlcSeekGain = 0;
+    state.vlcSeekHold = false;
+    state.vlcClock = 0;
     if (state.vlcSeekTimer) clearTimeout(state.vlcSeekTimer);
     state.vlcSeekTimer = null;
   }
@@ -6116,10 +6144,20 @@
          patrz vlcSeek): po niej kolejka skoku poznaje, że skok się wykonał
          (patrz flushVlcSeek) */
       state.vlcEngineTime = state.vlcTime;
+      /* Ile doniesień zegara już było: dopiero po pierwszym wiadomo, od jakiej
+         pozycji mierzyć skalę przewijania (patrz flushVlcSeek → vlcSeekAim). */
+      state.vlcClock = (state.vlcClock | 0) + 1;
       if ((event.length | 0) > 0) state.vlcLength = event.length | 0;
       /* Zegar silnika to dowód, że dane naprawdę dochodzą: wczytujący się kanał
          nie może zostać uznany za martwy (patrz armVlcWatchdog) */
       noteStreamActivity();
+      /* Gdzie obraz naprawdę stanął po zleconym skoku — domykanie pętli skoku
+         (patrz vlcSeekCheck) */
+      vlcSeekCheck();
+      /* Licznik i kotwica skoku: dopóki silnik nie doniesie miejsca, do którego
+         doszedł, pokazujemy cel, o który prosił pilot (patrz seekAnchorMs) —
+         inaczej licznik cofałby się na chwilę po każdym skoku */
+      state.vlcTime = seekAnchorMs();
       /* cofnięty program otwiera się na swoim końcu — pierwszy raz, gdy znamy
          długość okna, przeskakujemy przed koniec programu z EPG (patrz
          stepToNeighbor i seekToProgramEnd) */
@@ -6861,6 +6899,16 @@
     state.vlcSeekWant = null;
     state.vlcSeekSent = null;
     state.vlcSeekAt = 0;
+    /* domykanie pętli skoku: skala przewijania zmierzona w poprzednim oknie
+       nagrania nie opisuje nowego (patrz vlcSeekSettle) */
+    state.vlcSeekGoal = null;
+    state.vlcSeekFrom = null;
+    state.vlcSeekPrev = null;
+    state.vlcSeekSteady = 0;
+    state.vlcSeekTries = 0;
+    state.vlcSeekGain = 0;
+    state.vlcSeekHold = false;
+    state.vlcClock = 0;
     if (state.vlcSeekTimer) clearTimeout(state.vlcSeekTimer);
     state.vlcSeekTimer = null;
     markExoMode(false);
@@ -7545,6 +7593,34 @@
   var VLC_SEEK_GAP = 600;    /* co tyle budzik kolejki pyta, czy silnik już skończył */
   var VLC_SEEK_WAIT = 1600;  /* po tylu milisekundach zlecenie idzie bez potwierdzenia */
 
+  /* ---  DOMYKANIE PĘTLI SKOKU (VLC): gdzie obraz naprawdę stanął  ---
+     VLC bez indeksu strumienia liczy drogę do celu z oszacowanej długości nagrania
+     (bajty na sekundę wzięte z początku strumienia). Gdy oszacowanie mija się
+     z prawdą — a w nagraniach od dostawcy mija się nierzadko o dziesiątki procent —
+     skok ląduje krótko: przy ⏩ z 5. minuty o 10 minut obraz staje na 9., bo silnik
+     przeszedł tylko ~40% drogi (dokładnie zgłoszenie z kanapy).
+
+     Dlatego po zleceniu patrzymy, gdzie silnik naprawdę stanął — mówi o tym jego
+     własny zegar obrazu (zdarzenie „time”, ten sam, którym liczy się pasek) —
+     mierzymy z tego skalę przewijania (ile drogi wychodzi z jednego zlecenia)
+     i dociągamy cel drugim zleceniem:
+
+         żądanie = tu jestem + (cel − tu jestem) / skala
+
+     Zmierzona skala zostaje w pamięci kanału, więc kolejne skoki trafiają od razu
+     — jedno zlecenie, jedno lądowanie, bez szarpania obrazem. Pętla kończy się
+     na celu, a kanał, który skoków nie przewija, zostaje przy tym, co pokaże. */
+  var VLC_SEEK_QUIET = 220;     /* tyle ciszy pilota kończy gest trzymania ⏪/⏩ */
+  var VLC_SEEK_CONFIRM = 1500;  /* tyle musi minąć od zlecenia, nim uwierzymy pozycji */
+  var VLC_SEEK_STEADY = 2000;   /* doniesienia różniące się o tyle to już granie obrazu */
+  var VLC_SEEK_HOLD = 3;        /* ile spokojnych doniesień z rzędu zamyka skok */
+  var VLC_SEEK_PATIENCE = 4000; /* po tylu ms bierzemy pozycję, jaka jest */
+  var VLC_SEEK_CORRECT = 3;     /* ile razy wolno dociągnąć obraz do celu */
+  var VLC_SEEK_MOVE_MIN = 3000; /* krótsze zlecenie nie mówi nic o skali przewijania */
+  var VLC_SEEK_GAIN_MIN = 0.08; /* skala spoza widełek = nie ma czego mierzyć */
+  var VLC_SEEK_GAIN_MAX = 12;
+  var VLC_SEEK_CAP = 3;         /* dociągamy najwyżej tyle razy dalej niż zostało */
+
   function seekAnchorMs() {
     var here = state.vlcTime | 0;
     var pending = state.vlcPendingSeek | 0;
@@ -7559,23 +7635,120 @@
 
   /* Zlecenie skoku o krok: cel zapamiętujemy, a pasek, licznik i kotwica skoku
      idą za nim od razu — dzięki temu kolejne ⏩ doliczają krok do tego, co widać,
-     nawet gdy silnik jeszcze wykonuje poprzedni skok (patrz seekAnchorMs). */
+     nawet gdy silnik jeszcze wykonuje poprzedni skok (patrz seekAnchorMs).
+
+     Pierwsze naciśnięcie w geście (nic nie czeka i nic nie leci) idzie do silnika
+     od razu — krok ma być natychmiastowy. Trzymany klawisz tylko dolicza cel:
+     jeden gest pilota to jeden skok obrazu, a nie po jednym na każde powtórzenie
+     klawisza, więc obraz nie jest szarpany kilkudziesięcioma skokami naraz
+     (patrz vlcSeekHold i VLC_SEEK_QUIET). */
   function vlcSeekStep(ms) {
     var target = Math.max(0, Math.round(ms));
+    var fresh = (state.vlcSeekSent === null || state.vlcSeekSent === undefined) &&
+      (state.vlcSeekWant === null || state.vlcSeekWant === undefined);
+    state.vlcSeekGoal = target;
     state.vlcSeekWant = target;
+    state.vlcSeekTries = 0;
     state.vlcTime = target;
     state.vlcPendingSeek = target;
     state.vlcPendingAt = Date.now();
-    return flushVlcSeek();
+    if (fresh) return flushVlcSeek();
+    state.vlcSeekHold = true;
+    armVlcSeekFlush(VLC_SEEK_QUIET, true);
+    return true;
   }
 
-  /* Czy silnik wykonał poprzednie zlecenie? Patrzymy na pozycję, którą doniósł sam
-     silnik (patrz vlcEvent), a nie na wpis optymistyczny skoku (patrz vlcSeek) —
-     ten mówi tylko o tym, o co poprosiliśmy. */
-  function vlcSeekDone() {
+  /* Żądanie, które ma szansę trafić w cel, gdy znamy już skalę przewijania tego
+     strumienia (patrz vlcSeekSettle), a bez pomiaru prosi o sam cel. */
+  function vlcSeekAim(goal, from) {
+    var scale = state.vlcSeekGain;
+    if (!scale || from === null || from === undefined) return goal;
+    var aim = Math.round(from + (goal - from) / scale);
+    /* Ani dalej niż VLC_SEEK_CAP razy odległość, która została, ani poza okno
+       nagrania — jeden pomiar nie może wypluć żądania z kosmosu. */
+    var rest = (goal - from) * VLC_SEEK_CAP;
+    if (Math.abs(aim - from) > Math.abs(rest)) aim = Math.round(from + rest);
+    if (state.vlcLength > 0) aim = Math.min(aim, state.vlcLength);
+    return Math.max(0, aim);
+  }
+
+  /* Doniesienie zegara obrazu (patrz vlcEvent): czy zlecony skok się rozstrzygnął?
+     Skok w VLC melduje najpierw sam cel, a dopiero po chwili pozycję, w której
+     obraz naprawdę stanął — dlatego skok uchodzi za rozstrzygnięty dopiero wtedy,
+     gdy zegar jest spokojny przez VLC_SEEK_HOLD doniesień i od zlecenia minęło
+     VLC_SEEK_CONFIRM (patrz vlcSeekSettle). */
+  function vlcSeekCheck() {
+    if (state.vlcSeekSent === null || state.vlcSeekSent === undefined) return false;
+    var engine = state.vlcEngineTime | 0;
+    var prev = state.vlcSeekPrev;
+    state.vlcSeekPrev = engine;
+    if (prev === null || prev === undefined || Math.abs(engine - prev) > VLC_SEEK_STEADY) {
+      /* pierwsze doniesienie po zleceniu (albo zegar właśnie skoczył): dopiero
+         za chwilę będzie wiadomo, gdzie obraz stanął */
+      state.vlcSeekSteady = 0;
+      return false;
+    }
+    state.vlcSeekSteady = (state.vlcSeekSteady | 0) + 1;
+    if (vlcSeekAge() < VLC_SEEK_CONFIRM) return false;
+    if (state.vlcSeekSteady < VLC_SEEK_HOLD) return false;
+    return vlcSeekSettle();
+  }
+
+  /* Rozstrzygnięcie skoku: obraz stanął (albo budżet minął — patrz
+     VLC_SEEK_PATIENCE). Mierzymy z tego skalę przewijania tego strumienia
+     i — jeśli obraz stanął obok celu — mówimy silnikowi, dokąd ma dojść,
+     poprawionym o tę skalę (patrz vlcSeekAim). */
+  function vlcSeekSettle() {
     var sent = state.vlcSeekSent;
-    if (sent === null || sent === undefined) return true;
-    return Math.abs((state.vlcEngineTime | 0) - (sent | 0)) <= VLC_SEEK_TOLERANCE;
+    if (sent === null || sent === undefined) return false;
+    var engine = state.vlcEngineTime | 0;
+    var from = state.vlcSeekFrom;
+    var goal = state.vlcSeekGoal;
+    if (goal === null || goal === undefined) goal = sent;
+    var heard = state.vlcSeekPrev !== null && state.vlcSeekPrev !== undefined;
+    var haveFrom = !(from === null || from === undefined);
+    var moved = haveFrom ? engine - from : null;
+    var asked = haveFrom ? sent - from : 0;
+    state.vlcSeekSent = null;
+    state.vlcSeekFrom = null;
+    state.vlcSeekPrev = null;
+    state.vlcSeekSteady = 0;
+    /* Skala przewijania: ile drogi obrazu wyszło z jednego zlecenia. Krótkie
+       zlecenia i skoki, które nie ruszyły obrazu, nic tu nie mówią
+       (patrz VLC_SEEK_MOVE_MIN). */
+    if (moved !== null && Math.abs(asked) >= VLC_SEEK_MOVE_MIN &&
+        Math.abs(moved) > VLC_SEEK_TOLERANCE) {
+      var scale = moved / asked;
+      if (scale > VLC_SEEK_GAIN_MIN && scale < VLC_SEEK_GAIN_MAX) state.vlcSeekGain = scale;
+    }
+    /* silnik nie donosi zegara (kanał bez pozycji): nie ma po czym dociągać */
+    if (!heard) { vlcSeekEnd(); return true; }
+    /* obraz stanął tam, gdzie prosił pilot — kolejka pusta */
+    if (Math.abs(engine - goal) <= VLC_SEEK_TOLERANCE) { vlcSeekEnd(); return true; }
+    /* obraz nie ruszył z miejsca: ten strumień tak nie przewija — dociąganie
+       tylko by nim szarpało */
+    if (moved !== null && Math.abs(moved) <= VLC_SEEK_TOLERANCE) { vlcSeekEnd(); return true; }
+    if ((state.vlcSeekTries | 0) >= VLC_SEEK_CORRECT) { vlcSeekEnd(); return true; }
+    /* Cel znów czeka w kolejce — tym razem z poprawką skali. Cel zostaje też na
+       liczniku, dopóki obraz do niego nie dojdzie: inaczej licznik cofałby się do
+       miejsca, w którym VLC stanął po pierwszym zleceniu (patrz seekAnchorMs). */
+    state.vlcSeekWant = goal;
+    state.vlcSeekTries = (state.vlcSeekTries | 0) + 1;
+    state.vlcPendingSeek = goal;
+    state.vlcPendingAt = Date.now();
+    armVlcSeekFlush(VLC_SEEK_GAP);
+    return true;
+  }
+
+  /* Koniec pętli skoku: kolejka pusta, a licznik pokazuje to, co naprawdę widać
+     (pozycja donoszona przez silnik — patrz vlcEvent, seekAnchorMs). */
+  function vlcSeekEnd() {
+    state.vlcSeekWant = null;
+    state.vlcSeekGoal = null;
+    state.vlcSeekTries = 0;
+    state.vlcPendingSeek = 0;
+    state.vlcPendingAt = 0;
+    updateOsdProgress();
   }
 
   /* Ile milisekund minęło od ostatniego zlecenia. Bez zlecenia (albo po zamknięciu
@@ -7589,9 +7762,9 @@
   }
 
   /* Wysłanie czekającego celu — jeden skok naraz. Gdy poprzedni jeszcze się
-     wykonuje, zlecenie zostaje w kolejce, a budzik próbuje ponownie za
-     VLC_SEEK_GAP; po VLC_SEEK_WAIT bierze to, co jest, żeby kanał, który skoków
-     nie potwierdza, nie został z licznikiem bez obrazu. */
+     wykonuje, czekamy, gdzie obraz stanie; po VLC_SEEK_WAIT zlecenie i tak idzie
+     (kanał, który skoków nie potwierdza, nie może zostać z licznikiem bez obrazu),
+     a po VLC_SEEK_PATIENCE bierzemy pozycję, jaka jest (patrz vlcSeekSettle). */
   function flushVlcSeek() {
     /* cel 0 (początek nagrania) to też zlecenie — pustą kolejkę znaczy dopiero
        brak wartości (patrz stopVlc) */
@@ -7602,21 +7775,63 @@
       state.vlcSeekWant = null;
       return false;
     }
-    if (!vlcSeekDone() && vlcSeekAge() < VLC_SEEK_WAIT) {
-      armVlcSeekFlush(VLC_SEEK_GAP);
+    /* Trzymany klawisz: cel czeka na koniec gestu (patrz vlcSeekStep) — dzięki
+       temu jeden gest pilota to jeden skok obrazu, a nie kilkadziesiąt. */
+    if (state.vlcSeekHold) {
+      armVlcSeekFlush(VLC_SEEK_QUIET);
       return true;
     }
+    if (state.vlcSeekSent !== null && state.vlcSeekSent !== undefined) {
+      var age = vlcSeekAge();
+      if (state.vlcSeekPrev === null || state.vlcSeekPrev === undefined) {
+        /* Silnik nic nie doniósł (kanał bez zegara obrazu): nie ma czego domykać,
+           więc zlecenie idzie dalej po VLC_SEEK_WAIT — jak przed domykaniem pętli. */
+        if (age < VLC_SEEK_WAIT) {
+          armVlcSeekFlush(VLC_SEEK_GAP);
+          return true;
+        }
+        state.vlcSeekSent = null;
+        state.vlcSeekFrom = null;
+      } else {
+        /* Silnik donosi zegar: czekamy, gdzie obraz stanął, i dopiero na tym
+           opieramy dalszą drogę (patrz vlcSeekCheck). Po VLC_SEEK_PATIENCE bierzemy
+           to, co jest — obraz, który stanął na jednej klatce, nie może trzymać
+           kolejki w nieskończoność. */
+        if (age < VLC_SEEK_PATIENCE) {
+          armVlcSeekFlush(VLC_SEEK_GAP);
+          return true;
+        }
+        return vlcSeekSettle();
+      }
+    }
     state.vlcSeekWant = null;
-    if (!vlcSeek(want)) return false;
-    state.vlcSeekSent = want;
+    /* Od jakiej pozycji silnika liczymy skalę przewijania — wyłącznie z doniesienia
+       silnika, nigdy z wpisu optymistycznego skoku (patrz vlcSeek). */
+    var from = (state.vlcClock | 0) > 0 ? (state.vlcEngineTime | 0) : null;
+    var req = vlcSeekAim(want, from);
+    if (!vlcSeek(req)) return false;
+    state.vlcSeekSent = req;
     state.vlcSeekAt = Date.now();
+    state.vlcSeekFrom = from;
+    state.vlcSeekPrev = null;
+    state.vlcSeekSteady = 0;
+    /* licznik pokazuje cel pilota, a nie żądanie z poprawką skali
+       (patrz seekAnchorMs, vlcSeek) */
+    state.vlcTime = want;
     return true;
   }
 
-  function armVlcSeekFlush(delay) {
-    if (state.vlcSeekTimer) return;
+  /* Budzik kolejki. `restart` przestawia go na nowo — tak odmierzana jest cisza
+     pilota w trzymanym klawiszu (patrz vlcSeekStep). */
+  function armVlcSeekFlush(delay, restart) {
+    if (state.vlcSeekTimer && !restart) return;
+    if (state.vlcSeekTimer) clearTimeout(state.vlcSeekTimer);
     state.vlcSeekTimer = setTimeout(function () {
       state.vlcSeekTimer = null;
+      /* Budzik to jedyne miejsce, w którym wiadomo, że pilot ucichł na
+         VLC_SEEK_QUIET — dopiero tu gest trzymania uchodzi za skończony
+         (patrz vlcSeekStep i vlcSeekHold). */
+      state.vlcSeekHold = false;
       flushVlcSeek();
     }, delay > 0 ? delay : VLC_SEEK_GAP);
   }
@@ -8982,6 +9197,9 @@
       suspendFocusInside(overlay);
     }
     state.osdMenu = false;
+    /* po ponownym otwarciu paska zapis idzie od nowa, choćby pozycja się nie
+       zmieniła (patrz updateOsdProgress) */
+    state.osdProgressKey = "";
     clearTimeout(state.osdTimer);
     state.osdTimer = null;
     if (state.osdTicker) {
@@ -9380,13 +9598,22 @@
          wcześniej, gdy obejmuje kilka programów (patrz watchSegmentOffsetSeconds). */
       var offsetMs = watchSegmentOffsetSeconds() * 1000;
       var at = Math.min(Math.max((state.vlcTime | 0) - offsetMs, 0), total * 1000);
-      bar.style.width = Math.min(100, Math.max(0, (at / (total * 1000)) * 100)) + "%";
-      var vlcTimeEl = $("playerTime");
-      if (vlcTimeEl) {
-        vlcTimeEl.textContent = formatTime(at / 1000) + " / " + formatTime(total) +
-          (isMuted() ? " • " + t("osd_muted") : "");
+      /* Zapis do paska tylko wtedy, gdy coś się naprawdę zmieniło: ta sama pozycja
+         przychodzi z silnika kilka razy na sekundę, a przeliczanie układu paska
+         kosztuje (patrz osdProgressKey). Kluczem jest sekunda pozycji — dokładnie
+         to, co widać w liczniku (formatTime zaokrągla w dół), więc licznik nigdy
+         nie „zamarznie” na starej wartości. */
+      var vlcKey = "v" + Math.floor(at / 1000) + "/" + total + (isMuted() ? "!m" : "");
+      if (state.osdProgressKey !== vlcKey) {
+        state.osdProgressKey = vlcKey;
+        bar.style.width = Math.min(100, Math.max(0, (at / (total * 1000)) * 100)) + "%";
+        var vlcTimeEl = $("playerTime");
+        if (vlcTimeEl) {
+          vlcTimeEl.textContent = formatTime(at / 1000) + " / " + formatTime(total) +
+            (isMuted() ? " • " + t("osd_muted") : "");
+        }
+        setOsdRemain(total - at / 1000);
       }
-      setOsdRemain(total - at / 1000);
       return;
     }
 
@@ -9396,22 +9623,35 @@
       /* pozycja względem początku bieżącego programu (patrz watchSegmentOffsetSeconds) */
       var offset = watchSegmentOffsetSeconds();
       var where = Math.min(Math.max(video.currentTime - offset, 0), windowSeconds);
-      bar.style.width = (where / windowSeconds) * 100 + "%";
-      var timeEl = $("playerTime");
-      if (timeEl) {
-        timeEl.textContent = formatTime(where) + " / " + formatTime(windowSeconds) +
-          (isMuted() ? " • " + t("osd_muted") : "");
+      /* sekunda pozycji wystarczy za klucz: pasek i licznik pokazują ją co do
+         sekundy (formatTime zaokrągla w dół — patrz osdProgressKey) */
+      var videoKey = "f" + Math.floor(where) + "/" + windowSeconds + (isMuted() ? "!m" : "");
+      if (state.osdProgressKey !== videoKey) {
+        state.osdProgressKey = videoKey;
+        bar.style.width = (where / windowSeconds) * 100 + "%";
+        var timeEl = $("playerTime");
+        if (timeEl) {
+          timeEl.textContent = formatTime(where) + " / " + formatTime(windowSeconds) +
+            (isMuted() ? " • " + t("osd_muted") : "");
+        }
+        setOsdRemain(windowSeconds - where);
       }
-      setOsdRemain(windowSeconds - where);
       return;
     }
 
-    /* kanał na żywo: pasek pokazuje, jak daleko jesteśmy w bieżącym programie */
+    /* kanał na żywo: pasek pokazuje, jak daleko jesteśmy w bieżącym programie.
+       Zmienia się co sekundę (pozycja bierze się z zegara), więc zapisujemy tylko
+       nową sekundę albo nowy program — jak wyżej (patrz osdProgressKey). */
     var now = currentProgram(channel);
-    bar.style.width = now
-      ? Math.max(0, Math.min(100, (Date.now() - now.start) / (now.end - now.start) * 100)) + "%"
-      : "0%";
-    setOsdRemain(now ? (now.end - Date.now()) / 1000 : null);
+    var remain = now ? (now.end - Date.now()) / 1000 : null;
+    var liveKey = "l" + (now ? now.start : 0) + "/" + (remain === null ? "-" : Math.floor(remain));
+    if (state.osdProgressKey !== liveKey) {
+      state.osdProgressKey = liveKey;
+      bar.style.width = now
+        ? Math.max(0, Math.min(100, (Date.now() - now.start) / (now.end - now.start) * 100)) + "%"
+        : "0%";
+      setOsdRemain(remain);
+    }
   }
 
   /* ------------------------  MENU OPCJI KANAŁU (pilot)  ------------------------ */

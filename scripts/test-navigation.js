@@ -1003,7 +1003,8 @@ check("sposob odtwarzania zdjety z paska, a pokazuje go diagnostyka",
 check("czas pozostały liczy sie na zywo, w archiwum i przez silnik odbiornika",
   src.indexOf("setOsdRemain(total - at / 1000);") > 0 &&
   src.indexOf("setOsdRemain(windowSeconds - where);") > 0 &&
-  src.indexOf("setOsdRemain(now ? (now.end - Date.now()) / 1000 : null);") > 0);
+  src.indexOf("var remain = now ? (now.end - Date.now()) / 1000 : null;") > 0 &&
+  src.indexOf("setOsdRemain(remain);") > 0);
 
 /* --- 21. przewijanie z pilota: warianty klawiszy ⏪ ⏩ ----------------------
    Jeden przycisk ⏪ / ⏩, a dekodery wysylaja go roznymi kodami: webOS
@@ -1525,12 +1526,15 @@ const clearMarkBody = src.slice(clearMarkStart, src.indexOf("\n  }", clearMarkSt
 check("nowy obraz gasi komunikat razem z wpisem o skoku",
   clearMarkStart > 0 && clearMarkBody.indexOf("hidePlayerToast();") > 0);
 
+const hideOsdStart = src.indexOf("function hideOsd()");
+const hideOsdBody = src.slice(hideOsdStart, src.indexOf("function toggleOsd()", hideOsdStart));
 check("pasek otwarty klawiszem OK jest menu, a nie tylko informacja",
   src.indexOf("osdMenu: false,") > 0 &&
   src.indexOf("function showOsd(options)") > 0 &&
   src.indexOf("state.osdMenu = !!(options && options.menu);") > 0 &&
   src.indexOf("else showOsd({ menu: true });") > 0 &&
-  src.indexOf("state.osdMenu = false;\n    clearTimeout(state.osdTimer);") > 0 &&
+  hideOsdBody.indexOf("state.osdMenu = false;") > 0 &&
+  hideOsdBody.indexOf("clearTimeout(state.osdTimer);") > 0 &&
   src.indexOf("state.osdMenu = false;\n    clearTimeout(overlayTimer);") > 0);
 check("fokus na przycisku paska (mysz, dotyk) tez znaczy menu",
   src.indexOf("button.onfocus = function () {\n      state.osdMenu = true;") > 0);
@@ -3728,7 +3732,13 @@ function vlcHarness(o) {
     },
     /* automatyczne przejscie na koniec programu (patrz rollArchiveAtEnd w app.js):
        w tym teście zdarzenia silnika nie niosą oglądanego programu, więc atrapa */
-    rollArchiveAtEnd: function () { return false; }
+    rollArchiveAtEnd: function () { return false; },
+    /* Domykanie petli skoku nalezy do bloku kolejki skoku (patrz vlcSeekCheck,
+       seekAnchorMs w app.js), a ten test wycina sam blok odtwarzacza VLC — tutaj
+       chodzi o to, ze zegar obrazu trafia do stanu i do licznika, a nie o sam skok.
+       W atrapie nie ma zlecenia w drodze, wiec kotwica to po prostu pozycja obrazu. */
+    vlcSeekCheck: function () { return false; },
+    seekAnchorMs: function () { return sandbox.state.vlcTime | 0; }
   };
   sandbox.window = sandbox;
   run(vlcCode, sandbox);

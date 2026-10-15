@@ -24,6 +24,12 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+## [3.0.13] — 2026-10-14
+
+### Poprawiono
+- **Skok w archiwum VLC trafia w licznik** — odtwarzacz bez indeksu strumienia szacuje odległość skoku z tempa na początku nagrania, więc „+10 min” z piątej minuty lądowało dopiero w dziewiątej; aplikacja mierzy teraz, o ile obraz naprawdę się przesunął, i o tyle poprawia następny skok (osobno dla każdego kanału).
+- **Pasek odtwarzania nie zabiera obrazu** — pasek i licznik zapisywały się przy każdym meldunku silnika, kilka razy na sekundę; teraz idą tylko wtedy, gdy na liczniku naprawdę widać nową sekundę.
+
 ## [3.0.12] — 2026-10-13
 
 ### Poprawiono
