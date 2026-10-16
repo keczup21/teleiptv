@@ -26,7 +26,19 @@
      był natychmiastowy i nie przepisywał za każdym razem megabajtów danych. */
   var BLOBS_KEY = "openiptvBlobs";
   var BLOB_FIELDS = ["playlistFileText", "epgFileText", "playlistFileName", "epgFileName"];
-  var APP_VERSION = "3.0.13";
+  /* Katalog kanałów (playlista z sieci albo panel Xtream) zapisujemy na
+     urządzeniu, żeby lista była widoczna od razu po włączeniu aplikacji, a nie
+     dopiero po pobraniu playlisty — na dekoderze to kilka sekund różnicy
+     (patrz readCatalogCache). Wpis trzymamy osobno i na profil, bo jest duży
+     (idzie przez pako). Źródeł lokalnych nie zapisujemy: plik jest pod ręką,
+     a jego katalog to ten sam megabajt danych drugi raz w pamięci. */
+  var CATALOG_KEY = "openiptvCatalog";
+  var CATALOG_SCHEMA = 1;
+  /* Powyżej tylu znaków (już po spakowaniu, w base64) katalogu nie zapisujemy:
+     pamięć aplikacji dzielimy z tekstami playlisty i EPG, a lista bez zapisu
+     i tak wczyta się z sieci — tak samo jak dotąd. */
+  var CATALOG_MAX_CHARS = 1200000;
+  var APP_VERSION = "3.0.14";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -106,6 +118,9 @@
     epgKey: "",
     epgUrl: "",
     epgTimer: null,
+    /* katalog dociągnięty w tle, który czeka na powrót do listy kanałów
+       (patrz applyPendingCatalog) */
+    catalogPending: null,
     selectedChannel: null,
     selectedGroup: "@all",
     playerReturn: "browserScreen",
@@ -437,6 +452,9 @@
     connecting_xtream: "Łączenie z panelem Xtream…", loading_playlist: "Pobieranie playlisty…",
     loading_epg: "Pobieranie EPG…", parsing_epg: "Parsowanie EPG…",
     channels_count: "kanałów", epg_programs: "programów", epg_no_data: "brak danych",
+    /* status listy kanałów z pamięci urządzenia (patrz loadCatalog) */
+    catalog_cached: "z pamięci", catalog_new: "nowa lista po powrocie",
+    catalog_offline: "brak łącza, lista z pamięci",
     no_epg: "Brak informacji EPG", next: "Następnie", error: "Błąd:", hourly_recording: "Nagranie godzinowe",
     program_left: "jeszcze {m} min", program_ending: "za chwilę koniec",
     archive_title: "Archiwum • ", days_back: " dni wstecz", archive_catchup: "Archiwum / catch-up",
@@ -753,6 +771,9 @@
     connecting_xtream: "Connecting to Xtream panel…", loading_playlist: "Loading playlist…",
     loading_epg: "Loading EPG…", parsing_epg: "Parsing EPG…",
     channels_count: "channels", epg_programs: "programs", epg_no_data: "no data",
+    /* status of the channel list read from device memory (see loadCatalog) */
+    catalog_cached: "from memory", catalog_new: "new list after return",
+    catalog_offline: "offline, list from memory",
     no_epg: "No EPG info", next: "Next", error: "Error:", hourly_recording: "Hourly recording",
     program_left: "{m} min left", program_ending: "ending soon",
     archive_title: "Archive • ", days_back: " days back", archive_catchup: "Archive / catch-up",
@@ -1524,7 +1545,12 @@
 
   function showScreen(id) {
     exitPlayerEpg();
-    if (id === "browserScreen") refreshRecentGroup();
+    if (id === "browserScreen") {
+      /* nowa lista, która dociągnęła się w tle i czekała na powrót do kanałów
+         (patrz applyPendingCatalog / loadCatalog) */
+      applyPendingCatalog();
+      refreshRecentGroup();
+    }
     for (var i = 0; i < SCREENS.length; i++) {
       $(SCREENS[i]).classList.toggle("hidden", SCREENS[i] !== id);
     }
@@ -2716,6 +2742,220 @@
     });
   }
 
+  /* ==================  KATALOG Z PAMIĘCI (SZYBKI START)  ================== */
+
+  /* Po co to jest: pobranie playlisty (albo listy z panelu Xtream) i rozbiór
+     jej na kanały trwa na dekoderze kilka sekund, a przez ten czas lista była
+     pusta z napisem „Pobieranie…”. Katalog z poprzedniego uruchomienia pozwala
+     narysować listę od razu (patrz loadCatalog), a świeże dane dociągnąć
+     w tle — i podmienić tylko wtedy, gdy naprawdę się różnią.
+
+     Zapis jest skrócony: zamiast obiektów („name”, „streamUrl”… powtórzone
+     w dziesięciu tysiącach kanałów) lecą tablice wartości, a całość pakuje
+     pako. Kanał odtwarzamy tak samo, jak robi to parsePlaylist — klucz kanału
+     to miejsce na liście i adres strumienia. */
+
+  var CATALOG_FIELDS = ["name", "streamUrl", "tvgId", "group", "logoUrl",
+    "catchupType", "catchupSource", "catchupDays", "correction"];
+  /* Pola, które w kanale są liczbami, a nie napisami (patrz parsePlaylist) */
+  var CATALOG_NUMBERS = { catchupDays: true, correction: true };
+
+  function compactCatalogChannels(channels) {
+    var rows = [];
+    for (var i = 0; i < channels.length; i++) {
+      var channel = channels[i] || {};
+      var row = [];
+      for (var f = 0; f < CATALOG_FIELDS.length; f++) row.push(channel[CATALOG_FIELDS[f]]);
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function expandCatalogChannels(rows) {
+    var channels = [];
+    if (!rows || !rows.length) return channels;
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i] || [];
+      var channel = {};
+      for (var f = 0; f < CATALOG_FIELDS.length; f++) {
+        var field = CATALOG_FIELDS[f];
+        var value = row[f];
+        if (value === undefined || value === null) value = CATALOG_NUMBERS[field] ? 0 : "";
+        channel[field] = value;
+      }
+      channel.key = i + "|" + channel.streamUrl;
+      channels.push(channel);
+    }
+    return channels;
+  }
+
+  /* Czyj to katalog: profil i wszystko, co zmienia jego zawartość. Zmiana
+     adresu playlisty, serwera albo konta Xtream unieważnia zapis — inaczej po
+     przełączeniu źródła widać byłoby przez chwilę (a przy niedostępnym nowym
+     źródle: trwale) starą listę. */
+  function catalogSignature(profile) {
+    if (!profile) return "";
+    return [
+      profile.id || "",
+      profile.sourceType || "",
+      profile.playlistUrl || "",
+      profile.playlistFileName || "",
+      profile.xtreamServer || "",
+      profile.xtreamUser || ""
+    ].join("|");
+  }
+
+  /* Tani „odcisk” listy: po nim poznajemy, czy katalog dociągnięty w tle
+     różni się od tego z pamięci. Pełne porównywanie list byłoby droższe niż
+     samo pobranie playlisty, a liczy się także kolejność kanałów (numer na
+     liście). */
+  function catalogFingerprint(channels) {
+    var list = channels || [];
+    var hash = 2166136261;
+    for (var i = 0; i < list.length; i++) {
+      var text = String((list[i] && list[i].name) || "") + "\u0001" +
+        String((list[i] && list[i].streamUrl) || "") + "\u0001" + i;
+      for (var c = 0; c < text.length; c++) {
+        hash ^= text.charCodeAt(c);
+        hash = Math.imul(hash, 16777619) >>> 0;
+      }
+    }
+    return list.length + ":" + hash.toString(36);
+  }
+
+  /* pako (to samo, które rozpakowuje EPG) jest w index.html, ale kod ma
+     działać także bez niego — wtedy katalog leży w pamięci jako zwykły JSON. */
+  function bytesToBase64(bytes) {
+    var out = "";
+    for (var i = 0; i < bytes.length; i += 8192) {
+      out += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + 8192, bytes.length)));
+    }
+    return window.btoa(out);
+  }
+
+  function base64ToBytes(text) {
+    var binary = window.atob(String(text || ""));
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  function readCatalogStore() {
+    try {
+      var store = JSON.parse(localStorage.getItem(CATALOG_KEY) || "{}");
+      return store && typeof store === "object" ? store : {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  function writeCatalogStore(store) {
+    try {
+      localStorage.setItem(CATALOG_KEY, JSON.stringify(store));
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /* Zapis katalogu na następne uruchomienie. Bez wyjątków na zewnątrz: brak
+     miejsca w pamięci urządzenia nie może przewracać wczytywania kanałów —
+     zapis jest tylko ułatwieniem (patrz readCatalogCache). */
+  function writeCatalogCache(profile, catalog) {
+    if (!profile || !profile.id || !catalog) return;
+    /* lokalnych plików nie zapisujemy (patrz komentarz przy CATALOG_KEY) */
+    if (profile.sourceType === "m3u-file") return;
+    if (!catalog.channels || !catalog.channels.length) return;
+
+    var payload = JSON.stringify({
+      savedAt: Date.now(),
+      epgUrl: catalog.epgUrl || "",
+      fingerprint: catalogFingerprint(catalog.channels),
+      channels: compactCatalogChannels(catalog.channels)
+    });
+
+    var zip = false;
+    var data = payload;
+    if (window.pako && window.pako.deflate) {
+      try {
+        data = bytesToBase64(window.pako.deflate(payload, { level: 3 }));
+        zip = true;
+      } catch (error) {
+        /* bez pako zostaje surowy JSON */
+        data = payload;
+        zip = false;
+      }
+    }
+    /* bardzo duży katalog zostawiamy sieci — pamięć dzielimy z tekstami EPG */
+    if (data.length > CATALOG_MAX_CHARS) return;
+
+    var store = readCatalogStore();
+    store[profile.id] = {
+      schema: CATALOG_SCHEMA,
+      signature: catalogSignature(profile),
+      savedAt: Date.now(),
+      count: catalog.channels.length,
+      zip: zip ? 1 : 0,
+      data: data
+    };
+
+    /* wpisy po usuniętych profilach są już niepotrzebne, a zajmują pamięć */
+    var profiles = (typeof settings === "object" && settings && settings.profiles) || null;
+    if (profiles) {
+      for (var id in store) {
+        var alive = false;
+        for (var p = 0; p < profiles.length; p++) {
+          if (profiles[p] && profiles[p].id === id) { alive = true; break; }
+        }
+        if (!alive) delete store[id];
+      }
+    }
+
+    if (writeCatalogStore(store)) return;
+    /* brak miejsca: najpierw zostaje sam wpis tego profilu, a gdy i to się nie
+       mieści, klucz znika — aplikacja działa wtedy jak dotąd, bez zapisu */
+    var only = {};
+    only[profile.id] = store[profile.id];
+    if (!writeCatalogStore(only)) {
+      try { localStorage.removeItem(CATALOG_KEY); } catch (error2) { /* brak pamięci */ }
+    }
+  }
+
+  /* Katalog z pamięci dla tego profilu — albo null, gdy go nie ma, pochodzi
+     z innego źródła (patrz catalogSignature) albo jest nieczytelny. */
+  function readCatalogCache(profile) {
+    if (!profile || !profile.id) return null;
+    var entry = readCatalogStore()[profile.id];
+    if (!entry || entry.schema !== CATALOG_SCHEMA) return null;
+    if (entry.signature !== catalogSignature(profile)) return null;
+    if (!entry.data) return null;
+
+    var text = String(entry.data);
+    if (entry.zip) {
+      if (!window.pako || !window.pako.inflate) return null;
+      try {
+        text = window.pako.inflate(base64ToBytes(text), { to: "string" });
+      } catch (error) {
+        return null;
+      }
+    }
+
+    var payload;
+    try {
+      payload = JSON.parse(text);
+    } catch (error2) {
+      return null;
+    }
+    var channels = expandCatalogChannels(payload && payload.channels);
+    if (!channels.length) return null;
+    return {
+      channels: channels,
+      epgUrl: String((payload && payload.epgUrl) || ""),
+      fingerprint: String((payload && payload.fingerprint) || ""),
+      savedAt: (payload && payload.savedAt) || 0
+    };
+  }
+
   /* ==========================  WCZYTANIE KATALOGU  ========================== */
 
   function setStatus(text) {
@@ -2975,6 +3215,40 @@
     if (mins > 0) state.epgTimer = setInterval(refreshEpg, mins * 60000);
   }
 
+  /* Wspólne wejście dla katalogu z pamięci i z pobrania: stan, lista, fokus.
+     `fromCache` mówi tylko o tym, skąd przyszły dane — pasek pisze wtedy „z
+     pamięci”, żeby było widać, że lista jest jeszcze z poprzedniego rozruchu. */
+  function applyCatalog(profile, catalog, fromCache) {
+    state.channels = catalog.channels;
+    state.epgUrl = profile.epgUrl || catalog.epgUrl || state.epgUrl;
+    /* 1) najpierw pokazujemy kanały */
+    renderCategories();
+    setStatus(state.channels.length + " " + t("channels_count") + (fromCache ? " • " + t("catalog_cached") : ""));
+    /* 2) Pilot: fokus wchodzi w kanały — inaczej zostawał w nagłówku (albo
+       w polu szukania) i trzeba było szukać listy strzałkami. Gdy użytkownik
+       właśnie pisze zapytanie, nie przerywamy mu. */
+    if (isTvMode() && document.activeElement !== $("searchInput")) focusChannelEntry();
+  }
+
+  /* Czy użytkownik jest już w liście kanałów (albo w obrazie)? Wtedy nowy
+     katalog nie może podmienić listy pod ręką — patrz loadCatalog. */
+  function catalogIsBrowsed() {
+    if (state.selectedChannel) return true;
+    var container = $("channels");
+    var active = document.activeElement;
+    return !!(container && active && active !== document.body && container.contains(active));
+  }
+
+  /* Katalog, który dociągnął się w tle, gdy użytkownik chodził już po liście
+     z pamięci — wchodzi w życie przy powrocie do kanałów (patrz showScreen). */
+  function applyPendingCatalog() {
+    var pending = state.catalogPending;
+    if (!pending) return;
+    state.catalogPending = null;
+    applyCatalog(pending.profile, pending.catalog, false);
+    setStatus(state.channels.length + " " + t("channels_count"));
+  }
+
   function loadCatalog() {
     var profile = activeProfile();
     if (!profile) {
@@ -3006,31 +3280,49 @@
        Listę kategorii czyści renderCategories(). */
     $("channels").textContent = "";
 
+    /* Lista z poprzedniego uruchomienia rysuje się od razu: pobranie playlisty
+       i rozbiór jej na kanały trwa na dekoderze kilka sekund, a do tej chwili
+       użytkownik patrzył w pustą listę (patrz readCatalogCache). Świeże dane
+       dociągamy niżej, w tle. */
+    var cached = profile.sourceType === "m3u-file" ? null : readCatalogCache(profile);
+    if (cached) applyCatalog(profile, cached, true);
+
     var loadSource;
     if (profile.sourceType === "xtream") {
-      setStatus(t("connecting_xtream"));
+      /* przy liście z pamięci nie mówimy „pobieranie” — kanały są już na ekranie
+         i status pokazuje, że to lista z pamięci */
+      if (!cached) setStatus(t("connecting_xtream"));
       loadSource = loadXtreamCatalog(profile);
     } else if (profile.playlistFileText) {
       var fileBase = "file:///" + (profile.playlistFileName || "playlist.m3u");
       loadSource = Promise.resolve(parsePlaylist(profile.playlistFileText, fileBase));
     } else {
-      setStatus(t("loading_playlist"));
+      if (!cached) setStatus(t("loading_playlist"));
       loadSource = fetchText(profile.playlistUrl).then(function (text) {
         return parsePlaylist(text, profile.playlistUrl);
       });
     }
 
     loadSource.then(function (catalog) {
-      state.channels = catalog.channels;
-      state.epgUrl = profile.epgUrl || catalog.epgUrl;
+      /* zapis na następne uruchomienie — patrz readCatalogCache (robi to także
+         „Zapisz i pobierz” w ustawieniach, bo przechodzi tędy) */
+      var fingerprint = catalogFingerprint(catalog.channels);
+      writeCatalogCache(profile, catalog);
 
-      /* 1) najpierw pokazujemy kanały */
-      renderCategories();
-
-      /* Pilot: po wczytaniu listy fokus wchodzi w kanały — inaczej zostawał
-         w nagłówku (albo w polu szukania) i trzeba było szukać listy strzałkami.
-         Gdy użytkownik właśnie pisze zapytanie, nie przerywamy mu. */
-      if (isTvMode() && document.activeElement !== $("searchInput")) focusChannelEntry();
+      /* Lista z pamięci jest identyczna: nie ma czego przerysowywać — wystarczy
+         zdjąć z paska napis „z pamięci”, żeby status mówił prawdę. */
+      if (cached && cached.fingerprint === fingerprint) {
+        state.epgUrl = profile.epgUrl || catalog.epgUrl || state.epgUrl;
+        setStatus(state.channels.length + " " + t("channels_count"));
+      } else if (cached && catalogIsBrowsed()) {
+        /* użytkownik chodzi już po liście z pamięci — podmiana listy skakałaby
+           mu pod palcem, więc nowa czeka na powrót do kanałów (patrz
+           applyPendingCatalog) */
+        state.catalogPending = { profile: profile, catalog: catalog, fingerprint: fingerprint };
+        setStatus(state.channels.length + " " + t("channels_count") + " • " + t("catalog_new"));
+      } else {
+        applyCatalog(profile, catalog, false);
+      }
 
       /* 2) EPG w tle (o ile włączone przy starcie) — start jest odroczony do
          chwili, gdy lista kanałów i fokus są już gotowe (patrz scheduleEpgStart),
@@ -3053,6 +3345,12 @@
       setStatus(state.channels.length + " " + t("channels_count"));
       scheduleEpgStart(profile, state.epgUrl);
     }).catch(function (error) {
+      /* przy liście z pamięci brak łącza nie może jej wyczyścić — użytkownik ma
+         kanały i może oglądać dalej, a pasek mówi, skąd ta lista jest */
+      if (cached) {
+        setStatus(state.channels.length + " " + t("channels_count") + " • " + t("catalog_offline"));
+        return;
+      }
       state.channels = [];
       setStatus(t("error") + " " + error.message);
     });

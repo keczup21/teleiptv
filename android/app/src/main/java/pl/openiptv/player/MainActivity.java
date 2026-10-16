@@ -74,6 +74,18 @@ public class MainActivity extends BridgeActivity {
     /* ---- odtwarzacz VLC (patrz VlcEngine) ---- */
     private VlcEngine vlcEngine;
 
+    /* Czy warstwa obrazu (TextureView) i odtwarzacz systemowy zostaly juz
+       utworzone — patrz ensureNativePlayer. Na starcie nie tworzymy ich wcale:
+       budowa ExoPlayera to kilkaset milisekund na dekoderze, a obraz potrzebny
+       jest dopiero po wybraniu kanalu. */
+    private boolean nativeLayerReady = false;
+
+    /* Czy strona poprosila o zwezenie warstwy obrazu (tryb obraz + EPG).
+       Pamietamy to, bo strona moze poprosic o zwezenie, zanim warstwa w ogole
+       powstanie — a wtedy uklad trzeba nalozyc na swiezo utworzona warstwe
+       (patrz ensureNativePlayer). */
+    private boolean videoSplit = false;
+
     /* Czy obraz zgasił system, gdy aplikacja schodziła w tło (patrz onStop).
        Po powrocie wznawiamy właśnie taki obraz — pauza użytkownika zostaje
        pauzą, a kanał zatrzymany przez system nie może zostać na jednej klatce
@@ -97,7 +109,7 @@ public class MainActivity extends BridgeActivity {
            (patrz diagCodecLines w app.js: wiersz o warstwie obrazu). */
         getWindow().getDecorView().setBackgroundColor(Color.BLACK);
         bindExitBridge();
-        initNativePlayer();
+        prepareVideoLayer();
         initVlcEngine();
     }
 
@@ -122,6 +134,22 @@ public class MainActivity extends BridgeActivity {
             webView.requestLayout();
         } catch (Exception ignored) {
             /* brak możliwości zmiany ustawień nie może blokować startu aplikacji */
+        }
+    }
+
+    /* Tlo strony jest przezroczyste, zeby przez nia bylo widac warstwe obrazu
+       pod spodem. Ustawiamy to od razu (jeden wpis), a samo tworzenie warstwy
+       i odtwarzacza systemowego odkładamy do pierwszego kanalu — patrz
+       ensureNativePlayer. Wczesniej powstawaly one w onCreate, czyli na
+       krytycznej drodze startu aplikacji, choc obraz jest potrzebny dopiero po
+       wybraniu kanalu. */
+    private void prepareVideoLayer() {
+        try {
+            Bridge bridge = getBridge();
+            WebView webView = bridge != null ? bridge.getWebView() : null;
+            if (webView != null) webView.setBackgroundColor(Color.TRANSPARENT);
+        } catch (Exception ignored) {
+            /* brak mostu nie moze blokowac startu aplikacji */
         }
     }
 
@@ -463,8 +491,15 @@ public class MainActivity extends BridgeActivity {
        nativeInfo(). Zdarzenia z odtwarzacza wracają do strony przez
        window.__openiptvNativeEvent (patrz app.js). */
 
+    /* Warstwa obrazu i odtwarzacz systemowy powstaja przy PIERWSZYM kanale,
+       nie w onCreate: budowa ExoPlayera (LoadControl, MediaSourceFactory, dwaj
+       sluchacze) to na dekoderze kilkaset milisekund, a na starcie aplikacji
+       nie jest potrzebna ani jedna klatka — patrz prepareVideoLayer. Strona
+       wola playNative(), a to wola te metode (patrz startNative). */
     @OptIn(markerClass = UnstableApi.class)
-    private void initNativePlayer() {
+    private void ensureNativePlayer() {
+        if (nativeLayerReady) return;
+        nativeLayerReady = true;
         try {
             Bridge bridge = getBridge();
             WebView webView = bridge != null ? bridge.getWebView() : null;
@@ -505,6 +540,9 @@ public class MainActivity extends BridgeActivity {
                 }
             });
             root.addView(videoView, 0);
+            /* Strona mogla juz poprosic o tryb obraz + EPG, zanim warstwa
+               powstawala — uklad nakladamy od razu na swieza warstwe. */
+            applyVideoSplit(videoSplit);
 
             /* Strona musi być przezroczysta, inaczej zasłoniłaby obraz. */
             webView.setBackgroundColor(Color.TRANSPARENT);
@@ -590,12 +628,19 @@ public class MainActivity extends BridgeActivity {
             /* Brak warstwy natywnej nie może blokować aplikacji — strona ma swoje
                drogi odtwarzania (patrz buildSourceQueue w app.js). */
             player = null;
+            /* ponowna proba przy nastepnym kanale: nieudane utworzenie warstwy
+               nie moze zablokowac drogi systemowej na stale */
+            nativeLayerReady = false;
             videoView = null;
         }
     }
 
     private void startNative(String url, String userAgent) {
-        if (player == null || videoView == null || url == null || url.isEmpty()) return;
+        if (url == null || url.isEmpty()) return;
+        /* warstwa obrazu i odtwarzacz powstaja tutaj — przy pierwszym kanale
+           (patrz ensureNativePlayer), a nie na starcie aplikacji */
+        ensureNativePlayer();
+        if (player == null || videoView == null) return;
         try {
             if (httpFactory != null && userAgent != null && !userAgent.isEmpty()) {
                 httpFactory.setUserAgent(userAgent);
@@ -642,6 +687,7 @@ public class MainActivity extends BridgeActivity {
        odtwarzacza systemowego (videoView) i VLC (vlcEngine.setSplit). Drogi
        strony (<video>) zwęża CSS w app.js. */
     private void applyVideoSplit(boolean on) {
+        videoSplit = on;
         try {
             if (vlcEngine != null) vlcEngine.setSplit(on);
         } catch (Exception ignored) {

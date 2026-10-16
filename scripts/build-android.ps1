@@ -72,6 +72,12 @@ try {
             throw "gradlew.bat not found in $androidDir (run 'npx cap add android' first)."
         }
         Write-Host "Running gradle assembleDebug ..."
+        # Gradle dopisuje do istniejacego pliku APK. Gdy nowa paczka jest mniejsza
+        # od poprzedniej (np. po wlaczeniu R8: 49,6 MB -> 46,0 MB), na koncu pliku
+        # zostaja smieci po starej wersji i APK do pobrania jest o kilka megabajtow
+        # wiekszy, niz powinien. Usuniecie pliku przed budowaniem to zalatwia.
+        $apkOut = Join-Path $androidDir "app\build\outputs\apk\debug\app-debug.apk"
+        if (Test-Path $apkOut) { Remove-Item -Force $apkOut }
         # Gradle pisze postep i noty javac na stderr, a przy ustawionym na sztywno
         # $ErrorActionPreference = "Stop" kazda taka nota przewraca skrypt, gdy
         # wyjscie jest przekierowane (np. do logu). Rozstrzyga kod wyjscia ponizej.

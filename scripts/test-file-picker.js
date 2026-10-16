@@ -23,6 +23,7 @@ const JAVA = path.join(ROOT, "android", "app", "src", "main", "java", "pl", "ope
 const PLUGIN = path.join(JAVA, "FilePlugin.java");
 const ACTIVITY = path.join(JAVA, "MainActivity.java");
 const MANIFEST = path.join(ROOT, "android", "app", "src", "main", "AndroidManifest.xml");
+const PROGUARD = path.join(ROOT, "android", "app", "proguard-rules.pro");
 
 const html = fs.readFileSync(INDEX, "utf8");
 const app = fs.readFileSync(APP, "utf8").replace(/\r\n/g, "\n");
@@ -30,6 +31,7 @@ const css = fs.readFileSync(CSS, "utf8");
 const java = fs.readFileSync(PLUGIN, "utf8");
 const activity = fs.readFileSync(ACTIVITY, "utf8");
 const manifest = fs.readFileSync(MANIFEST, "utf8");
+const proguard = fs.readFileSync(PROGUARD, "utf8");
 
 let fails = 0;
 function check(name, cond, extra) {
@@ -130,6 +132,15 @@ check("FilePlugin.java: brak wyboru i anulowanie to osobne odpowiedzi",
   java.indexOf('flag("unavailable")') > 0 && java.indexOf('flag("cancelled")') > 0);
 check("MainActivity: plugin jest zarejestrowany przed startem WebView",
   /registerPlugin\(FilePlugin\.class\)/.test(activity));
+/* Paczka na GitHuba przechodzi przez R8 (patrz buildTypes w build.gradle).
+   Capacitor znajduje metody pluginu po nazwach z adnotacji @PluginMethod, a nie
+   w kodzie - bez reguly keep R8 moze je przemianowac i wybor pliku przestaje
+   dzialac mimo poprawnego kodu (patrz proguard-rules.pro). */
+check("proguard-rules.pro: R8 zostawia nazwy metod pluginu (wybor pliku i aktualizacja)",
+  proguard.indexOf("-keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }") > 0 &&
+  proguard.indexOf("@com.getcapacitor.PluginMethod <methods>;") > 0 &&
+  proguard.indexOf("@com.getcapacitor.annotation.PermissionCallback <methods>;") > 0 &&
+  proguard.indexOf("@android.webkit.JavascriptInterface <methods>;") > 0);
 check("AndroidManifest.xml: czytanie pamieci tylko do Androida 12 (SDK 32)",
   /<uses-permission[^>]*READ_EXTERNAL_STORAGE[^>]*maxSdkVersion="32"/.test(manifest));
 

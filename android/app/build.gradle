@@ -11,8 +11,8 @@ android {
         applicationId "pl.openiptv.player"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 84
-        versionName "3.0.13"
+        versionCode 85
+        versionName "3.0.14"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         /* Silnik VLC (libVLC) wchodzi do paczki tylko dla architektur telewizorów
            — patrz libvlcAbiFilters w variables.gradle. Bez tego filtra paczka
@@ -32,8 +32,18 @@ android {
         }
     }
     buildTypes {
+        /* Wariant, który idzie na GitHuba, to debug (patrz
+           scripts/build-android.ps1), ale i tak przechodzi przez R8: wycina
+           nieużywane klasy z androidx/media3/VLC i pakietów Capacitora, dzięki
+           czemu kodu jest o ~2,5 MB mniej — mniej do wczytania na starcie
+           aplikacji i mniejsza paczka do pobrania. Reguły dla VLC i mostu do
+           strony (JavaScript) są w proguard-rules.pro. */
+        debug {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
         release {
-            minifyEnabled false
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

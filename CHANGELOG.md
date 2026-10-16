@@ -24,6 +24,15 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+## [3.0.14] — 2026-10-15
+
+### Zmieniono
+- **Kanały są na ekranie od razu po włączeniu aplikacji** — lista z poprzedniego uruchomienia zapisuje się na urządzeniu i wraca natychmiast, a świeże dane z playlisty albo panelu dociągają się w tle; pasek statusu mówi wtedy „z pamięci”.
+- **Nowa lista czeka, aż wrócisz do kanałów** — gdy w tle przyszła inna lista, a użytkownik chodzi już po kanałach, podmienia się dopiero po powrocie do listy (pasek pokazuje „nowa lista”), żeby nie skakać pod palcem.
+- **Bez łącza lista zostaje na ekranie** — zamiast pustej listy widać kanały z pamięci z napisem „brak łącza”.
+- **Start aplikacji nie buduje odtwarzacza odbiornika** — obraz systemowy (ExoPlayer) powstaje dopiero przy pierwszym kanale, więc włączenie aplikacji nie czeka na dekoder.
+- **Paczka do pobrania waży ~3,5 MB mniej** (46,0 MB zamiast 49,6 MB) — to samo działanie, krótsze pobieranie i mniej miejsca zajętego na dekoderze.
+
 ## [3.0.13] — 2026-10-14
 
 ### Poprawiono

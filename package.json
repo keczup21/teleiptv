@@ -1,6 +1,6 @@
 {
   "name": "teleiptv",
-  "version": "3.0.13",
+  "version": "3.0.14",
   "private": true,
   "description": "TeleIPTV dla Android TV / Google TV / Fire TV (.apk) - odtwarzacz IPTV na dekodery.",
   "engines": {
@@ -14,13 +14,14 @@
     "notes": "node scripts/release-notes.js",
     "build:android": "powershell -ExecutionPolicy Bypass -File scripts/build-android.ps1",
     "test:seek": "node scripts/test-seek-logic.js",
+    "test:cache": "node scripts/test-catalog-cache.js",
     "test:update": "node scripts/test-update-check.js",
     "test:ui": "node scripts/test-ui-scale.js",
     "test:pick": "node scripts/test-file-picker.js",
     "test:nav": "node scripts/test-navigation.js",
     "test:splash": "node scripts/test-splash.js",
     "test:notes": "node scripts/test-release-notes.js",
-    "test": "npm run test:seek && npm run test:update && npm run test:ui && npm run test:pick && npm run test:nav && npm run test:splash && npm run test:notes",
+    "test": "npm run test:seek && npm run test:update && npm run test:ui && npm run test:pick && npm run test:nav && npm run test:splash && npm run test:notes && npm run test:cache",
     "android:add": "npx cap add android",
     "android:sync": "npx cap sync android",
     "android:open": "npx cap open android"

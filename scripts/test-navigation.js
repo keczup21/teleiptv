@@ -3248,6 +3248,24 @@ check("odtwarzacz systemowy: bufor na zywo krotszy niz domyslne 50 s",
   java.indexOf("player.setMediaItem(MediaItem.fromUri(Uri.parse(url)));") > 0 &&
   java.indexOf("setAllowCrossProtocolRedirects(true)") > 0 &&
   java.indexOf("FLAG_KEEP_SCREEN_ON") > 0);
+/* Odtwarzacz i warstwa obrazu powstają dopiero przy pierwszym kanale
+   (ensureNativePlayer), a nie przy starcie aplikacji: budowa ExoPlayera to na
+   dekoderze kilkaset milisekund, a na starcie nie jest potrzebna ani jedna
+   klatka. Start ustawia wtedy tylko przezroczystość strony (prepareVideoLayer),
+   bo bez niej warstwa obrazu pod nią byłaby zasłonięta. */
+check("odtwarzacz systemowy: powstaje przy pierwszym kanale, a nie na starcie aplikacji",
+  java.indexOf("prepareVideoLayer();") > 0 &&
+  java.indexOf("initNativePlayer") < 0 &&
+  java.indexOf("ensureNativePlayer();") > 0 &&
+  java.indexOf("if (nativeLayerReady) return;") > 0 &&
+  java.indexOf("private boolean nativeLayerReady = false;") > 0 &&
+  java.indexOf("webView.setBackgroundColor(Color.TRANSPARENT);") > 0);
+/* Tryb obraz + EPG (zwężenie warstwy do lewej kolumny) może zostać włączony,
+   zanim warstwa powstanie — układ trzeba wtedy nałożyć na świeżo utworzoną. */
+check("odtwarzacz systemowy: tryb obraz + EPG dziala tez na swiezo utworzona warstwe",
+  java.indexOf("private boolean videoSplit = false;") > 0 &&
+  java.indexOf("videoSplit = on;") > 0 &&
+  java.indexOf("applyVideoSplit(videoSplit);") > 0);
 /* Warstwa obrazu: na odbiorniku, na którym element <video> zostawał czarny, dopóki
    klatki nie poszły kompozytorem GPU (patrz „video-layer-fix” w styles.css), klatki
    ExoPlayera nie mogą iść sprzętową płaszczyzną obrazu — SurfaceView. TextureView
