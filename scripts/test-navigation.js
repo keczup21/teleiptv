@@ -2503,6 +2503,20 @@ queueBox.settings.engineHint = "bogus";
 check("uruchomione: nieznana pamiec nic nie psuje",
   engines("http://s/x.ts").join(",") === qPlain.join(","), JSON.stringify(engines("http://s/x.ts")));
 queueBox.settings.engineHint = "";
+/* Panel Xtream potrafi opisać kanał jako .m3u8, choć serwer oddaje tylko .ts
+   (HLS wyłączone) — manifest wraca HTTP 404 i trzy drogi pod .m3u8 kończą się
+   na „format nieobsługiwany”. Adres Xtream (/live/<user>/<pass>/<id>) dostaje
+   więc te same drogi pod .ts, żeby kanał grał mimo wyłączonego HLS. */
+const qXtreamM3u8 = queueBox.buildSourceQueue("http://s:8080/live/u/p/12345.m3u8");
+check("uruchomione: kanal Xtream .m3u8 dostaje zapasowy .ts (serwer bez HLS)",
+  qXtreamM3u8.map(function (e) { return e.engine; }).join(",") === "native,hls,mse,native,mse" &&
+  qXtreamM3u8[3].url === "http://s:8080/live/u/p/12345.ts" &&
+  qXtreamM3u8[4].url === "http://s:8080/live/u/p/12345.ts" &&
+  qXtreamM3u8[3].hls !== true && qXtreamM3u8[4].hls !== true,
+  JSON.stringify(qXtreamM3u8.map(function (e) { return e.engine + ":" + e.url; })));
+check("uruchomione: zwykly .m3u8 spoza /live/ nie dostaje zmyślonego .ts",
+  engines("http://s/y.m3u8").join(",") === "native,hls,mse",
+  JSON.stringify(engines("http://s/y.m3u8")));
 /* Kanał na żywo w aplikacji na Androidzie idzie najpierw do odtwarzacza odbiornika
    (ExoPlayer) — to on rozbiera TS i HLS sprzętowo, więc tylko on daje 4K bez
    zrywania (patrz startExoSource). Gdy zawiedzie, kolejka idzie dalej jak dotąd. */
@@ -3257,7 +3271,7 @@ check("odtwarzacz systemowy: powstaje przy pierwszym kanale, a nie na starcie ap
   java.indexOf("prepareVideoLayer();") > 0 &&
   java.indexOf("initNativePlayer") < 0 &&
   java.indexOf("ensureNativePlayer();") > 0 &&
-  java.indexOf("if (nativeLayerReady) return;") > 0 &&
+  java.indexOf("if (nativeLayerReady && player != null) return;") > 0 &&
   java.indexOf("private boolean nativeLayerReady = false;") > 0 &&
   java.indexOf("webView.setBackgroundColor(Color.TRANSPARENT);") > 0);
 /* Tryb obraz + EPG (zwężenie warstwy do lewej kolumny) może zostać włączony,
@@ -3295,6 +3309,52 @@ check("odtwarzacz systemowy: panel diagnostyki zna dekoder, klatki na obrazie i 
   src.indexOf("diag_exo_frames: \"frames on screen\"") > 0 &&
   src.indexOf("diag_exo_dropped: \"zgubione klatki\"") > 0 &&
   src.indexOf("diag_exo_dropped: \"dropped frames\"") > 0);
+
+/* Długie oglądanie: proces strony potrafi zniknąć (system go zamyka przy braku
+   pamięci), a obraz systemowy potrafi stanąć na jednej klatce. Oba przypadki
+   muszą mieć własne wyjście — bez tego zostaje zamrożony ekran i „trzeba wyjść
+   z aplikacji”. Domyślna obsługa renderera w Capacitorze zwraca false, a wtedy
+   Android zamyka całą aplikację (to właśnie „apka sama się wyrzuciła”). */
+check("proces strony: znikniecie renderera odtwarza interfejs, a nie zamyka aplikacji",
+  java.indexOf("bridge.addWebViewListener(new WebViewListener()") > 0 &&
+  java.indexOf("public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail)") > 0 &&
+  java.indexOf("public void onPageLoaded(WebView webView)") > 0 &&
+  java.indexOf("rememberRecovery(crashed ? \"renderer-crash\" : \"renderer-memory\");") > 0 &&
+  java.indexOf("recoverWebView(crashed ? \"renderer-crash\" : \"renderer-memory\");") > 0 &&
+  java.indexOf("recreate();") > 0 &&
+  src.indexOf("window.__openiptvHeartbeat = function () {") > 0);
+check("proces strony: budzik zycia wykrywa zamrozony watek strony i odtwarza interfejs",
+  java.indexOf("private void startHeartbeat()") > 0 &&
+  java.indexOf("window.__openiptvHeartbeat?window.__openiptvHeartbeat():''") > 0 &&
+  java.indexOf("if (now - heartbeatSince < HEARTBEAT_LOST) {") > 0 &&
+  java.indexOf("recoverWebView(\"heartbeat\");") > 0 &&
+  java.indexOf("startHeartbeat();") > 0 && java.indexOf("stopHeartbeat();") > 0);
+/* Obraz systemowy: brak klatek na powierzchni to zatrzymany obraz, a nie „wolny
+   strumień”. Most odtwarza odtwarzacz (limit NATIVE_MAX_RESTARTS), a potem oddaje
+   kanał kolejce zdarzeniem „stalled-out” — to odpowiednik guardTick dla MSE
+   i countFrames w VlcEngine. */
+check("odtwarzacz systemowy: zatrzymany obraz liczy klatki i restartuje odtwarzacz",
+  java.indexOf("private static final int NATIVE_STALL_TICKS = 10;") > 0 &&
+  java.indexOf("private static final int NATIVE_MAX_RESTARTS = 2;") > 0 &&
+  java.indexOf("nativeSurfaceFrames++;") > 0 &&
+  java.indexOf("private void checkNativeStall()") > 0 &&
+  java.indexOf("emitNative(\"stalled\", null, 0, 0);") > 0 &&
+  java.indexOf("private void restartNativePlayer()") > 0 &&
+  java.indexOf("emitNative(\"restart\", null, 0, 0);") > 0 &&
+  java.indexOf("emitNative(\"stalled-out\", null, 0, 0);") > 0 &&
+  java.indexOf("public String restartNative()") > 0);
+check("odtwarzacz systemowy: panel diagnostyki pokazuje zrywy, restarty i odtworzenia",
+  java.indexOf("info.put(\"stalls\", nativeStalls);") > 0 &&
+  java.indexOf("info.put(\"restarts\", nativeRestarts);") > 0 &&
+  java.indexOf("info.put(\"recoveries\", recoveryCount());") > 0 &&
+  src.indexOf("t(\"diag_exo_stalls\")") > 0 &&
+  src.indexOf("t(\"diag_exo_restarts\")") > 0 &&
+  src.indexOf("t(\"diag_exo_recover\")") > 0);
+check("odtwarzacz systemowy: krytyczny brak pamieci zwalnia zatrzymany odtwarzacz",
+  java.indexOf("public void onTrimMemory(int level)") > 0 &&
+  java.indexOf("ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL") > 0 &&
+  java.indexOf("releaseNativePlayer();") > 0 &&
+  java.indexOf("if (player == null && !nativeUrl.isEmpty()) {") > 0);
 check("odtwarzacz systemowy: odtwarzacz odbiornika jest w paczce Androida (takze HLS)",
   gradle.indexOf("androidx.media3:media3-exoplayer:$media3Version") > 0 &&
   gradle.indexOf("androidx.media3:media3-exoplayer-hls:$media3Version") > 0 &&
@@ -3464,7 +3524,7 @@ const exoCode = src.slice(exoStart, exoEnd);
 
 function exoHarness(o) {
   o = o || {};
-  const calls = { errors: [], notes: [], played: [], playCalls: [], muted: [], stopped: 0, timers: [] };
+  const calls = { errors: [], notes: [], played: [], playCalls: [], muted: [], stopped: 0, timers: [], toasts: [] };
   const classes = { html: [], body: [] };
   const toggle = function (list, name, on) {
     const at = list.indexOf(name);
@@ -3520,6 +3580,9 @@ function exoHarness(o) {
     },
     handlePlaybackError: function (message) { calls.errors.push(message); },
     diagNote: function (note) { calls.notes.push(note); },
+    /* OSD „Przestrajanie obrazu…” — przy zrywie obrazu systemowego pokazuje, że
+       aplikacja nie zostawiła jednej klatki na ekranie (patrz exoEvent). */
+    showPlayerToast: function (text) { calls.toasts.push(text); },
     noteStreamActivity: function () {},
     scheduleRecentRecord: function () {},
     updateOsd: function () {},
@@ -3615,6 +3678,26 @@ xh.api.stopExo();
 check("odtwarzacz systemowy: zamkniecie obrazu gasi odtwarzacz i zdejmuje przezroczystosc",
   xh.calls.stopped === 1 && xh.api.state.exoPlaying === false &&
   xh.classes.html.indexOf("exo-player") < 0 && xh.classes.body.indexOf("exo-player") < 0);
+
+/* Obraz systemowy stanął w połowie oglądania: most odtwarza odtwarzacz dla tego
+   samego kanału, więc strona pokazuje „przestrajanie” i uzbraja budzik — ale nie
+   oddaje kanału kolejce od razu (to dopiero „stalled-out”). */
+xh = exoHarness({});
+xh.api.startExoSource({ engine: "exo", url: "http://s/live/4k.m3u8" });
+xh.api.exoEvent({ type: "size", width: 3840, height: 2160 });
+xh.api.exoEvent({ type: "playing" });
+xh.api.exoEvent({ type: "stalled" });
+check("odtwarzacz systemowy: zryw obrazu pokazuje przestrajanie i nie oddaje kanalu",
+  xh.calls.errors.length === 0 && xh.calls.toasts.indexOf("<osd_recycle>") >= 0 &&
+  xh.calls.notes.indexOf("<diag_stall>") >= 0,
+  JSON.stringify({ errors: xh.calls.errors, toasts: xh.calls.toasts, notes: xh.calls.notes }));
+xh.api.exoEvent({ type: "restart" });
+check("odtwarzacz systemowy: restart odtwarzacza trafia do dziennika panelu",
+  xh.calls.notes.indexOf("<diag_exo_restart>") >= 0);
+xh.api.exoEvent({ type: "stalled-out" });
+check("odtwarzacz systemowy: po wyczerpaniu restarow kanal idzie kolejka",
+  xh.calls.errors.length === 1 && xh.calls.errors[0].indexOf("<engine_exo>") > 0 &&
+  xh.calls.errors[0].indexOf("<diag_stall>") > 0, JSON.stringify(xh.calls.errors));
 
 /* Most, którego nie ma (webOS, przeglądarka, starsza paczka) — kanał idzie dalej. */
 xh = exoHarness({ native: false });

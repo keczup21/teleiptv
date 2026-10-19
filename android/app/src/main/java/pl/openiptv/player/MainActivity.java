@@ -1,5 +1,6 @@
 package pl.openiptv.player;
 
+import android.content.ComponentCallbacks2;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.graphics.Color;
@@ -8,6 +9,9 @@ import android.media.MediaCodec;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.TextureView;
@@ -15,6 +19,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -37,6 +42,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
 
 import org.json.JSONObject;
 
@@ -70,6 +76,49 @@ public class MainActivity extends BridgeActivity {
     /* Stan dla app.js czytany przez most nativeState() — most chodzi na własnym
        wątku, więc nie wolno w nim dotykać odtwarzacza. */
     private volatile String nativeState = "{\"type\":\"idle\"}";
+
+    /* ---- kondycja obrazu systemowego (patrz checkNativeStall) ----
+
+       Droga MSE ma swój strażnik (guardTick w app.js), a VLC liczy klatki na
+       powierzchni obrazu (countFrames w VlcEngine). Odtwarzacz systemowy nie miał
+       dotąd żadnego: gdy w połowie meczu dekoder albo łącze stanęło, na ekranie
+       zostawała jedna klatka, a aplikacja dalej twierdziła, że obraz leci —
+       jedynym wyjściem było wyjście z aplikacji. Liczymy więc klatki dochodzące
+       na powierzchnię (onSurfaceTextureUpdated) i po NATIVE_STALL_TICKS sekundach
+       bez ani jednej oddajemy obraz na świeży odtwarzacz (restartNativePlayer). */
+    private static final int NATIVE_STALL_TICKS = 10;   /* sekundy bez klatki = obraz stanął */
+    private static final int NATIVE_MAX_RESTARTS = 2;   /* ile razy odtwarzamy odtwarzacz */
+    private volatile int nativeSurfaceFrames = 0;
+    private int nativeFramesSeen = 0;
+    private int nativeFlatTicks = 0;
+    private volatile boolean nativeStallReported = false;
+    private volatile int nativeRestarts = 0;
+    private volatile int nativeStalls = 0;
+    private volatile long nativePosition = 0;
+    private volatile int nativeTrimLevel = 0;
+    private String nativeUrl = "";
+    private String nativeUserAgent = "";
+    private Runnable nativeWatch;
+
+    /* ---- odzyskiwanie po zniknięciu procesu strony (patrz bindWebViewRecovery) ----
+
+       WebView rysuje stronę w osobnym procesie. Gdy system go zamknie (brak
+       pamięci po długim oglądaniu), Capacitor domyślnie zwraca „nie obsłużono”
+       i Android zamyka CAŁĄ aplikację — dokładnie to, co wyglądało jak „apka
+       sama się wyrzuciła”. Zamiast tego odtwarzamy aktywność: nowy WebView,
+       nowy proces strony. Drugi przypadek to proces, który żyje, ale jego wątek
+       stanął: wtedy nic nie odpowiada (pilot, Wstecz), więc budzik pyta stronę
+       o życie i po HEARTBEAT_LOST milisekund ciszy robi to samo. */
+    private static final String KEY_RECOVERIES = "webViewRecoveries";
+    private static final String KEY_RECOVERY_AT = "webViewRecoveryAt";
+    private static final String KEY_RECOVERY_WHY = "webViewRecoveryWhy";
+    private static final long HEARTBEAT_TICK = 4000;
+    private static final long HEARTBEAT_LOST = 12000;
+    private final Handler watchHandler = new Handler(Looper.getMainLooper());
+    private boolean pageLoaded = false;
+    private boolean heartbeatPending = false;
+    private long heartbeatSince = 0;
+    private Runnable heartbeatTick;
 
     /* ---- odtwarzacz VLC (patrz VlcEngine) ---- */
     private VlcEngine vlcEngine;
@@ -109,6 +158,11 @@ public class MainActivity extends BridgeActivity {
            (patrz diagCodecLines w app.js: wiersz o warstwie obrazu). */
         getWindow().getDecorView().setBackgroundColor(Color.BLACK);
         bindExitBridge();
+        /* Proces strony (renderer) i budzik jej życia — patrz bindWebViewRecovery.
+           Musi być gotowe przed pierwszym kanałem: to właśnie po długim oglądaniu
+           system zamyka proces strony, a wtedy domyślna obsługa Capacitora kończy
+           całą aplikację. */
+        bindWebViewRecovery();
         prepareVideoLayer();
         initVlcEngine();
     }
@@ -208,7 +262,7 @@ public class MainActivity extends BridgeActivity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            MainActivity.this.startNative(url, userAgent);
+                            MainActivity.this.startNative(url, userAgent, false);
                         }
                     });
                     return "ok";
@@ -224,12 +278,33 @@ public class MainActivity extends BridgeActivity {
                     });
                 }
 
+                /* Świeży odtwarzacz dla tego samego kanału (patrz
+                   restartNativePlayer): most woła to, gdy obraz systemowy stanął,
+                   zamiast oddawać kanał kolejce przy pierwszym zrywie. */
+                @JavascriptInterface
+                public String restartNative() {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            MainActivity.this.restartNativePlayer();
+                        }
+                    });
+                    return "ok";
+                }
+
                 @JavascriptInterface
                 public void setNativePlaying(final boolean playing) {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            if (player != null) player.setPlayWhenReady(playing);
+                            if (player != null) {
+                                player.setPlayWhenReady(playing);
+                                return;
+                            }
+                            /* Odtwarzacz mógł zostać zwolniony przy krytycznym
+                               braku pamięci (patrz onTrimMemory); „graj” buduje go
+                               od nowa dla tego samego kanału. */
+                            if (playing && !nativeUrl.isEmpty()) restartNativePlayer();
                         }
                     });
                 }
@@ -276,6 +351,17 @@ public class MainActivity extends BridgeActivity {
                         info.put("layerVisible", isNativeLayerVisible());
                         info.put("surfaceReady", videoView != null && videoView.isAvailable());
                         info.put("error", nativeLastError);
+                        /* Ile razy obraz systemowy stanął i ile razy interfejs był
+                           odtwarzany (patrz checkNativeStall, recoverWebView). Bez
+                           tych liczb „po dłuższym oglądaniu coś się zepsuło” znowu
+                           byłoby tylko wrażeniem — a nie wiadomo, czy ratował obraz
+                           odtwarzacz, czy cały interfejs. */
+                        info.put("stalls", nativeStalls);
+                        info.put("restarts", nativeRestarts);
+                        info.put("position", nativePosition);
+                        info.put("trim", nativeTrimLevel);
+                        info.put("recoveries", recoveryCount());
+                        info.put("recoveryReason", recoveryReason());
                         return info.toString();
                     } catch (Exception error) {
                         return "";
@@ -358,6 +444,198 @@ public class MainActivity extends BridgeActivity {
             }, "OpenIptvNative");
         } catch (Exception ignored) {
             /* bez mostu wyjście zostaje przy systemowym przycisku Wstecz */
+        }
+    }
+
+    /* =================  PROCES STRONY: PRZYWRACANIE INTERFEJSU  =================
+
+       Dwa przypadki, które na dłuższym oglądaniu wyglądały jak „zawieszona apka”:
+
+         • proces renderowania strony zniknął (system go zamknął albo padł) —
+           ekran zostaje na ostatniej klatce, a Capacitor bez własnego listenera
+           zwraca „nie obsłużono”, więc Android zamyka całe aplikacje,
+         • proces żyje, ale wątek strony stanął — nic nie odpowiada (pilot,
+           Wstecz, nasze evaluateJavascript), a jedynym wyjściem było zabicie
+           aplikacji.
+
+       W obu przypadkach odtwarzamy aktywność: nowy WebView, nowy proces strony,
+       świeży app.js. To widoczny koszt (wraca lista kanałów), ale mniejszy niż
+       wyjście z aplikacji — i tylko tak da się wyjść z zamrożonego procesu.
+       Licznik odtworzeń zapisujemy, żeby panel diagnostyki po powrocie pokazał,
+       że interfejs był odtwarzany, a nie że „nic się nie stało”. */
+
+    private void bindWebViewRecovery() {
+        try {
+            Bridge bridge = getBridge();
+            if (bridge == null) return;
+            bridge.addWebViewListener(new WebViewListener() {
+                @Override
+                public void onPageLoaded(WebView webView) {
+                    pageLoaded = true;
+                }
+
+                @Override
+                public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail) {
+                    pageLoaded = false;
+                    boolean crashed = detail != null && detail.didCrash();
+                    rememberRecovery(crashed ? "renderer-crash" : "renderer-memory");
+                    recoverWebView(crashed ? "renderer-crash" : "renderer-memory");
+                    /* true = obsłużone. Domyślne false każe systemowi zamknąć
+                       całą aplikację razem z martwym procesem strony. */
+                    return true;
+                }
+            });
+        } catch (Exception ignored) {
+            /* bez listenera zostaje dotychczasowe zachowanie Capacitora */
+        }
+    }
+
+    /* Odtworzenie interfejsu poza kolejką zdarzeń WebView: aktywność buduje się
+       od nowa (onDestroy zwalnia stary most, onCreate tworzy nowy WebView).
+       Po trzech odtworzeniach w dziesięć minut nie ma już czego ratować —
+       kończymy aplikację, zamiast odtwarzać ją w kółko. */
+    private void recoverWebView(final String reason) {
+        nativeLastError = reason;
+        watchHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    stopHeartbeat();
+                    if (isFinishing() || isDestroyed()) return;
+                    if (recoveryCount() > 3) {
+                        finish();
+                        return;
+                    }
+                    recreate();
+                } catch (Exception error) {
+                    finish();
+                }
+            }
+        });
+    }
+
+    /* Licznik odtworzeń interfejsu — okno dziesięciu minut, bo tyle wystarcza,
+       żeby odróżnić „system raz zamknął proces” od „proces pada w kółko”. */
+    private int rememberRecovery(String reason) {
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+            long now = System.currentTimeMillis();
+            long last = prefs.getLong(KEY_RECOVERY_AT, 0L);
+            int count = prefs.getInt(KEY_RECOVERIES, 0);
+            count = (now - last < 10 * 60 * 1000L) ? count + 1 : 1;
+            prefs.edit()
+                .putInt(KEY_RECOVERIES, count)
+                .putLong(KEY_RECOVERY_AT, now)
+                .putString(KEY_RECOVERY_WHY, reason == null ? "" : reason)
+                .apply();
+            return count;
+        } catch (Exception error) {
+            return 0;
+        }
+    }
+
+    private int recoveryCount() {
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+            long now = System.currentTimeMillis();
+            if (now - prefs.getLong(KEY_RECOVERY_AT, 0L) >= 10 * 60 * 1000L) return 0;
+            return prefs.getInt(KEY_RECOVERIES, 0);
+        } catch (Exception error) {
+            return 0;
+        }
+    }
+
+    private String recoveryReason() {
+        try {
+            return getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_RECOVERY_WHY, "");
+        } catch (Exception error) {
+            return "";
+        }
+    }
+
+    /* Budzik życia strony. evaluateJavascript wykonuje się w wątku strony, więc
+       brak odpowiedzi w HEARTBEAT_LOST milisekund znaczy, że ten wątek stanął
+       (albo proces jest w połowie zamknięcia) — wtedy odtwarzamy interfejs.
+       Pytamy tylko po wczytaniu strony i tylko gdy aplikacja jest na ekranie:
+       w tle WebView może legalnie wstrzymać wykonywanie skryptów. */
+    private void startHeartbeat() {
+        stopHeartbeat();
+        heartbeatTick = new Runnable() {
+            @Override
+            public void run() {
+                if (heartbeatTick != this) return;
+                WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+                if (webView == null || !pageLoaded) {
+                    watchHandler.postDelayed(this, HEARTBEAT_TICK);
+                    return;
+                }
+                long now = SystemClock.uptimeMillis();
+                if (heartbeatPending) {
+                    if (now - heartbeatSince < HEARTBEAT_LOST) {
+                        watchHandler.postDelayed(this, HEARTBEAT_TICK);
+                        return;
+                    }
+                    heartbeatPending = false;
+                    rememberRecovery("heartbeat");
+                    recoverWebView("heartbeat");
+                    return;
+                }
+                heartbeatPending = true;
+                heartbeatSince = now;
+                try {
+                    webView.evaluateJavascript(
+                        "window.__openiptvHeartbeat?window.__openiptvHeartbeat():''",
+                        new ValueCallback<String>() {
+                            @Override
+                            public void onReceiveValue(String value) {
+                                heartbeatPending = false;
+                            }
+                        });
+                } catch (Exception error) {
+                    heartbeatPending = false;
+                }
+                watchHandler.postDelayed(this, HEARTBEAT_TICK);
+            }
+        };
+        watchHandler.postDelayed(heartbeatTick, HEARTBEAT_TICK);
+    }
+
+    private void stopHeartbeat() {
+        if (heartbeatTick != null) {
+            watchHandler.removeCallbacks(heartbeatTick);
+            heartbeatTick = null;
+        }
+        heartbeatPending = false;
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        startHeartbeat();
+    }
+
+    @Override
+    public void onPause() {
+        stopHeartbeat();
+        super.onPause();
+    }
+
+    /* System kończy pamięć: odtwarzacz, który stoi (pauza, aplikacja w tle), nie
+       może dalej trzymać dekodera i bufora. Wracamy do niego w onStart, więc
+       pauza użytkownika zostaje pauzą, a obraz wraca po powrocie do aplikacji. */
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        nativeTrimLevel = level;
+        if (level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) return;
+        try {
+            if (player != null && !player.getPlayWhenReady()) {
+                /* nowa próba po powrocie: limit restartów liczy zrywy obrazu w
+                   jednym odtwarzaniu, a nie zwolnienia pamięci */
+                nativeRestarts = 0;
+                releaseNativePlayer();
+            }
+        } catch (Exception ignored) {
         }
     }
 
@@ -487,8 +765,8 @@ public class MainActivity extends BridgeActivity {
        jedną z dróg.
 
        Most (OpenIptvNative) jest ten sam co dla przycisku „Wyjdź”: playNative(),
-       stopNative(), setNativePlaying(), setNativeMuted(), nativeState(),
-       nativeInfo(). Zdarzenia z odtwarzacza wracają do strony przez
+       stopNative(), restartNative(), setNativePlaying(), setNativeMuted(),
+       nativeState(), nativeInfo(). Zdarzenia z odtwarzacza wracają do strony przez
        window.__openiptvNativeEvent (patrz app.js). */
 
     /* Warstwa obrazu i odtwarzacz systemowy powstaja przy PIERWSZYM kanale,
@@ -498,7 +776,15 @@ public class MainActivity extends BridgeActivity {
        wola playNative(), a to wola te metode (patrz startNative). */
     @OptIn(markerClass = UnstableApi.class)
     private void ensureNativePlayer() {
-        if (nativeLayerReady) return;
+        /* Warstwa obrazu powstaje raz. Sam odtwarzacz może powstać jeszcze raz:
+           po zerwaniu obrazu (patrz restartNativePlayer) i po zwolnieniu przy
+           krytycznym braku pamięci (patrz onTrimMemory) — wtedy budujemy tylko
+           jego, bez drugiej warstwy pod stroną. */
+        if (nativeLayerReady && player != null) return;
+        if (nativeLayerReady) {
+            createNativePlayer();
+            return;
+        }
         nativeLayerReady = true;
         try {
             Bridge bridge = getBridge();
@@ -537,6 +823,11 @@ public class MainActivity extends BridgeActivity {
 
                 @Override
                 public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+                    /* Jedna klatka doszła na ekran. To jedyny licznik, którego
+                       odtwarzacz nie może nam zamilczeć (patrz checkNativeStall) —
+                       na nim stoi wykrywanie zatrzymanego obrazu, tak samo jak
+                       w VlcEngine (patrz watchSurfaceFrames). */
+                    nativeSurfaceFrames++;
                 }
             });
             root.addView(videoView, 0);
@@ -547,6 +838,25 @@ public class MainActivity extends BridgeActivity {
             /* Strona musi być przezroczysta, inaczej zasłoniłaby obraz. */
             webView.setBackgroundColor(Color.TRANSPARENT);
 
+            createNativePlayer();
+        } catch (Exception ignored) {
+            /* Brak warstwy natywnej nie może blokować aplikacji — strona ma swoje
+               drogi odtwarzania (patrz buildSourceQueue w app.js). */
+            player = null;
+            /* ponowna proba przy nastepnym kanale: nieudane utworzenie warstwy
+               nie moze zablokowac drogi systemowej na stale */
+            nativeLayerReady = false;
+            videoView = null;
+        }
+    }
+
+    /* Sam odtwarzacz, bez warstwy obrazu. Powstaje przy pierwszym kanale, a potem
+       jeszcze po każdym zwolnieniu: restart po zatrzymanym obrazie
+       (restartNativePlayer) i krytyczny brak pamięci (onTrimMemory). Warstwa
+       (TextureView) zostaje ta sama, więc nie ma drugiej powierzchni pod stroną. */
+    @OptIn(markerClass = UnstableApi.class)
+    private void createNativePlayer() {
+        try {
             /* Bufor na żywo: domyślne 50 s w pamięci odtwarzacza to przy 4K
                kilkadziesiąt megabajtów i obraz daleko za transmisją. 8–24 s
                wystarcza na zrywkę łącza, a start nie czeka pół minuty. */
@@ -570,7 +880,7 @@ public class MainActivity extends BridgeActivity {
             player.setAudioAttributes(AudioAttributes.DEFAULT, true);
             /* Powierzchnia obrazu może już istnieć (warstwa była widoczna, zanim
                powstał odtwarzacz) — wtedy przypinamy ją od razu. */
-            if (videoView.isAvailable()) player.setVideoTextureView(videoView);
+            if (videoView != null && videoView.isAvailable()) player.setVideoTextureView(videoView);
             player.addListener(new Player.Listener() {
                 @Override
                 public void onPlaybackStateChanged(int state) {
@@ -624,18 +934,15 @@ public class MainActivity extends BridgeActivity {
                     nativeDroppedSeen = droppedFrames;
                 }
             });
+            startNativeWatch();
         } catch (Exception ignored) {
-            /* Brak warstwy natywnej nie może blokować aplikacji — strona ma swoje
-               drogi odtwarzania (patrz buildSourceQueue w app.js). */
+            /* Bez odtwarzacza kanał idzie drogami strony (patrz buildSourceQueue
+               w app.js) — most nadal odpowiada, więc kolejka prób działa dalej. */
             player = null;
-            /* ponowna proba przy nastepnym kanale: nieudane utworzenie warstwy
-               nie moze zablokowac drogi systemowej na stale */
-            nativeLayerReady = false;
-            videoView = null;
         }
     }
 
-    private void startNative(String url, String userAgent) {
+    private void startNative(String url, String userAgent, boolean restart) {
         if (url == null || url.isEmpty()) return;
         /* warstwa obrazu i odtwarzacz powstaja tutaj — przy pierwszym kanale
            (patrz ensureNativePlayer), a nie na starcie aplikacji */
@@ -645,12 +952,20 @@ public class MainActivity extends BridgeActivity {
             if (httpFactory != null && userAgent != null && !userAgent.isEmpty()) {
                 httpFactory.setUserAgent(userAgent);
             }
+            nativeUrl = url;
+            nativeUserAgent = userAgent == null ? "" : userAgent;
             /* Liczniki liczymy od nowa dla każdej próby — panel diagnostyki ma
-               pokazywać ten kanał, a nie całą sesję odtwarzacza. */
+               pokazywać ten kanał, a nie całą sesję odtwarzacza. Wyjątkiem jest
+               restart tego samego kanału: on musi pamiętać, ile razy już próbował
+               (patrz checkNativeStall), inaczej limit nigdy by się nie wyczerpał. */
             nativeDecoder = "";
             nativeFirstFrame = false;
             nativeLastError = "";
             nativeDroppedBase = nativeDroppedSeen;
+            nativeFlatTicks = 0;
+            nativeFramesSeen = nativeSurfaceFrames;
+            nativeStallReported = false;
+            if (!restart) nativeRestarts = 0;
             /* Warstwa musi być widoczna, zanim powstanie jej powierzchnia — inaczej
                odtwarzacz dostaje obraz dopiero przy kolejnym wejściu na kanał. */
             videoView.setVisibility(View.VISIBLE);
@@ -668,6 +983,12 @@ public class MainActivity extends BridgeActivity {
 
     private void stopNative() {
         nativeState = "{\"type\":\"idle\"}";
+        /* kanał zamknięty: nie ma czego wznawiać po powrocie do aplikacji
+           (patrz onStart) ani restartować po zrywie (patrz restartNativePlayer) */
+        nativeUrl = "";
+        nativeUserAgent = "";
+        nativeFlatTicks = 0;
+        nativeStallReported = false;
         try {
             if (player != null) {
                 player.stop();
@@ -679,6 +1000,113 @@ public class MainActivity extends BridgeActivity {
             if (videoView != null) videoView.setVisibility(View.GONE);
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } catch (Exception ignored) {
+        }
+    }
+
+    /* Świeży odtwarzacz dla tego samego kanału. To odpowiedź na obraz, który
+       stanął (checkNativeStall): zatrzymany egzemplarz ExoPlayera potrafi już nie
+       wrócić do gry, a nowy dostaje nowy dekoder i nowy bufor. Po NATIVE_MAX_RESTARTS
+       próbach oddajemy kanał kolejce (app.js przejdzie do następnego sposobu). */
+    @OptIn(markerClass = UnstableApi.class)
+    private void restartNativePlayer() {
+        if (nativeUrl.isEmpty()) return;
+        String url = nativeUrl;
+        String userAgent = nativeUserAgent;
+        if (nativeRestarts >= NATIVE_MAX_RESTARTS) {
+            emitNative("stalled-out", null, 0, 0);
+            stopNative();
+            return;
+        }
+        nativeRestarts++;
+        nativeStallReported = false;
+        nativeFlatTicks = 0;
+        releaseNativePlayer();
+        ensureNativePlayer();
+        if (player == null) {
+            emitNative("error", "brak odtwarzacza", 0, 0);
+            stopNative();
+            return;
+        }
+        emitNative("restart", null, 0, 0);
+        startNative(url, userAgent, true);
+    }
+
+    /* Zwolnienie samego odtwarzacza, bez ruszania warstwy obrazu: po restarcie
+       warstwa zostaje ta sama, a przy krytycznym braku pamięci zwalniamy dekoder
+       i bufor, żeby system nie zamknął aplikacji. */
+    @OptIn(markerClass = UnstableApi.class)
+    private void releaseNativePlayer() {
+        stopNativeWatch();
+        nativePosition = 0;
+        try {
+            if (player != null) {
+                player.clearVideoSurface();
+                player.release();
+                player = null;
+            }
+        } catch (Exception ignored) {
+        }
+        nativeState = "{\"type\":\"idle\"}";
+    }
+
+    /* Budzik kondycji obrazu systemowego: co sekundę patrzy, czy klatki jeszcze
+       dochodzą na powierzchnię. Kanał na żywo zawsze je oddaje, więc brak przyrostu
+       przez NATIVE_STALL_TICKS sekund to zatrzymany obraz, a nie „wolny strumień”
+       (wolny start pilnuje armExoWatchdog po stronie app.js). */
+    private void startNativeWatch() {
+        if (nativeWatch != null) return;
+        nativeWatch = new Runnable() {
+            @Override
+            public void run() {
+                checkNativeStall();
+                /* tylko bieżący łańcuch: restart odtwarzacza zakłada nowy budzik
+                   (startNativeWatch), a stary nie może wtedy wrócić jako drugi */
+                if (nativeWatch == this) watchHandler.postDelayed(this, 1000);
+            }
+        };
+        watchHandler.postDelayed(nativeWatch, 1000);
+    }
+
+    private void stopNativeWatch() {
+        if (nativeWatch != null) {
+            watchHandler.removeCallbacks(nativeWatch);
+            nativeWatch = null;
+        }
+        nativeFlatTicks = 0;
+    }
+
+    private void checkNativeStall() {
+        if (player == null) {
+            nativeFlatTicks = 0;
+            return;
+        }
+        try {
+            nativePosition = Math.max(0, player.getCurrentPosition());
+            /* Pauza i aplikacja w tle nie są zatrzymanym obrazem; buforowanie też
+               nie — kończy się błędem odtwarzacza (timeout 8 s), nie ciszą. */
+            if (!player.getPlayWhenReady() || player.getPlaybackState() != Player.STATE_READY) {
+                nativeFlatTicks = 0;
+                nativeFramesSeen = nativeSurfaceFrames;
+                return;
+            }
+            int frames = nativeSurfaceFrames;
+            if (frames != nativeFramesSeen) {
+                nativeFramesSeen = frames;
+                nativeFlatTicks = 0;
+                nativeStallReported = false;
+                return;
+            }
+            /* Przed pierwszą klatką nie ma czego pilnować — to jeszcze start
+               kanału (patrz armExoWatchdog w app.js). */
+            if (!nativeFirstFrame) return;
+            nativeFlatTicks++;
+            if (nativeFlatTicks < NATIVE_STALL_TICKS || nativeStallReported) return;
+            nativeStallReported = true;
+            nativeStalls++;
+            emitNative("stalled", null, 0, 0);
+            restartNativePlayer();
+        } catch (Exception ignored) {
+            /* odtwarzacz w trakcie zwalniania — następna próbka go nie zastanie */
         }
     }
 
@@ -823,6 +1251,13 @@ public class MainActivity extends BridgeActivity {
         super.onStart();
         if (!pausedByStop) return;
         pausedByStop = false;
+        /* Odtwarzacz mógł zostać zwolniony w tle przez krytyczny brak pamięci
+           (patrz onTrimMemory) — wtedy wracamy do kanału na świeżym odtwarzaczu,
+           zamiast pokazywać czarny ekran pod przezroczystą stroną. */
+        if (player == null && !nativeUrl.isEmpty()) {
+            restartNativePlayer();
+            return;
+        }
         try {
             if (player != null) player.setPlayWhenReady(true);
         } catch (Exception ignored) {
@@ -856,6 +1291,8 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onDestroy() {
+        stopHeartbeat();
+        stopNativeWatch();
         try {
             if (player != null) {
                 player.release();

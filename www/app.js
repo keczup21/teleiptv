@@ -38,7 +38,7 @@
      pamięć aplikacji dzielimy z tekstami playlisty i EPG, a lista bez zapisu
      i tak wczyta się z sieci — tak samo jak dotąd. */
   var CATALOG_MAX_CHARS = 1200000;
-  var APP_VERSION = "3.0.14";
+  var APP_VERSION = "3.0.15";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -616,6 +616,13 @@
     diag_native_player: "odtwarzacz systemowy (ExoPlayer)",
     diag_exo_frames: "klatki na obrazie",
     diag_exo_dropped: "zgubione klatki",
+    /* Odtwarzacz systemowy bez klatek na ekranie: ile razy obraz stanął i został
+       przestawiony na świeży odtwarzacz oraz ile razy trzeba było odtworzyć cały
+       interfejs (patrz checkNativeStall i recoverWebView w MainActivity). */
+    diag_exo_stalls: "zrywy obrazu",
+    diag_exo_restarts: "przestrajanie odtwarzacza",
+    diag_exo_recover: "odtworzenia interfejsu",
+    diag_exo_restart: "obraz stanął — odtwarzacz systemowy wystartował od nowa",
     /* Wiersz silnika VLC (przełącznik „Odtwarzacz VLC (beta)”) — pokazuje to, co
        odróżnia „strumień nie nadchodzi” od „dekoder nie wyrabia”: klatki, które
        doszły na obraz, te które wypadły, uszkodzone dane i bitrate strumienia. */
@@ -933,6 +940,10 @@
     diag_native_player: "system player (ExoPlayer)",
     diag_exo_frames: "frames on screen",
     diag_exo_dropped: "dropped frames",
+    diag_exo_stalls: "picture stalls",
+    diag_exo_restarts: "player restarts",
+    diag_exo_recover: "interface restarts",
+    diag_exo_restart: "picture stopped — the system player started over",
     diag_vlc: "VLC picture",
     diag_vlc_buffer: "the VLC engine keeps it",
     diag_vlc_start: "handing the channel to the VLC engine",
@@ -4758,6 +4769,13 @@
         " · " + t("diag_exo_frames") + ": " +
         (native.firstFrame ? t("diag_yes") : t("diag_no")) +
         " · " + t("diag_exo_dropped") + ": " + (native.dropped | 0) +
+        /* Liczby z całej sesji, nie z jednej próby: ile razy obraz stanął, ile
+           razy odtwarzacz wystartował od nowa i ile razy interfejs był odtwarzany
+           po zniknięciu procesu strony (patrz nativeInfo w MainActivity). */
+        " · " + t("diag_exo_stalls") + ": " + (native.stalls | 0) +
+        " · " + t("diag_exo_restarts") + ": " + (native.restarts | 0) +
+        " · " + t("diag_exo_recover") + ": " + (native.recoveries | 0) +
+        (native.recoveryReason ? " (" + String(native.recoveryReason) + ")" : "") +
         /* Warstwa ukryta przy przezroczystej stronie znaczy dokładnie to, co widać
            jako czarny (przed 2.1.10 biały) ekran; „powierzchnia obrazu” mówi, czy
            warstwa zdążyła ją mieć, a błąd — co tę próbę zakończyło (nativeInfo). */
@@ -6214,6 +6232,28 @@
       updateOsd();
       return;
     }
+    if (type === "stalled") {
+      /* Obraz systemowy stanął: klatki przestały dochodzić na powierzchnię
+         (patrz checkNativeStall w MainActivity). Most odtwarza w tej chwili
+         odtwarzacz dla tego samego kanału, więc budzik dostaje nową szansę;
+         gdy i to nie pomoże, przyjdzie „stalled-out” i kanał pójdzie kolejką. */
+      diagNote(t("diag_stall"));
+      showPlayerToast(t("osd_recycle"));
+      armExoWatchdog(state.engineToken, EXO_START_WAIT);
+      return;
+    }
+    if (type === "restart") {
+      /* świeży odtwarzacz już wystartował — panel diagnostyki pokazuje, że obraz
+         był przestrajany, a nie że po prostu „stanął” (patrz checkNativeStall) */
+      diagNote(t("diag_exo_restart"));
+      return;
+    }
+    if (type === "stalled-out") {
+      /* limit odtworzeń wyczerpany: obraz nie wrócił także na nowym odtwarzaczu,
+         więc ten kanał idzie dalej kolejką (MSE/HLS) jak przy każdym błędzie */
+      handlePlaybackError(t("err_stream") + " (" + engineName("exo") + ": " + t("diag_stall") + ")");
+      return;
+    }
     if (type === "buffering") return;
     if (type === "ended") {
       /* koniec nagrania — idziemy do następnego programu (patrz rollArchiveAtEnd) */
@@ -6225,6 +6265,13 @@
         (event.message ? ": " + String(event.message).slice(0, 120) : "") + ")");
     }
   }
+  /* Znacznik życia strony dla MainActivity: most pyta o niego co kilka sekund
+     (patrz startHeartbeat w MainActivity). Brak odpowiedzi znaczy, że wątek
+     strony stanął — wtedy aktywność odtwarza interfejs, zamiast zostawiać
+     zamrożony obraz i pilota, który nic nie robi. */
+  window.__openiptvHeartbeat = function () {
+    return "ok";
+  };
   window.__openiptvNativeEvent = exoEvent;
 
   /* Budzik drogi natywnej: brak obrazu musi oddać kanał kolejce, a nie zostawić
@@ -6598,6 +6645,18 @@
     if (hlsUrl !== primaryUrl) {
       browser.push({ engine: "native", url: hlsUrl });
       browser.push({ engine: "hls", url: hlsUrl });
+    }
+
+    /* Odwrotność wpisu wyżej: ten sam kanał jako surowy TS. Panel Xtream potrafi
+       opisać kanał jako .m3u8, choć serwer oddaje tylko .ts (HLS wyłączone) —
+       manifest wraca wtedy HTTP 404 i wszystkie drogi pod .m3u8 kończą się na
+       „format nieobsługiwany”. Adres Xtream (/live/<user>/<pass>/<id>) poznajemy
+       po /live/ w ścieżce — tylko tam zamiana .m3u8 → .ts to ten sam strumień
+       w innym pojemniku, a nie zmyślony plik. */
+    var tsUrl = primaryUrl.replace(/\.m3u8(\?.*)?$/i, ".ts$1");
+    if (tsUrl !== primaryUrl && /\/live\//i.test(primaryUrl.split("#")[0].split("?")[0])) {
+      browser.push({ engine: "native", url: tsUrl });
+      browser.push({ engine: "mse", url: tsUrl });
     }
 
     /* Drogi sprzętowe stają na CZELE kolejki — i na kanale na żywo, i w nagraniu

@@ -24,6 +24,17 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+## [3.0.15] — 2026-10-18
+
+### Poprawiono
+- **Zatrzymany obraz wraca sam** — gdy w połowie oglądania klatki przestają dochodzić na ekran, aplikacja odtwarza odtwarzacz systemowy dla tego samego kanału (do dwóch razy), a gdy to nie pomoże, oddaje kanał kolejnemu sposobowi odtwarzania, zamiast zostawiać jedną klatkę na cały mecz.
+- **Aplikacja nie zamyka się sama po zniknięciu procesu strony** — gdy system kończy pamięć i zamyka proces renderowania, interfejs odtwarza się od nowa (wraca lista kanałów), a nie cała aplikacja.
+- **Zamrożony interfejs odtwarza się sam** — gdy strona przestaje odpowiadać, po kilku sekundach ciszy interfejs wstaje od nowa; wcześniej jedynym wyjściem było zamknięcie aplikacji.
+- **Krytyczny brak pamięci zwalnia zatrzymany odtwarzacz** — obraz na pauzie albo w tle nie trzyma już dekodera i bufora, a po powrocie wraca na świeżym odtwarzaczu.
+- **Panel diagnostyki pokazuje zrywy, restarty odtwarzacza i odtworzenia interfejsu** — po dłuższej sesji widać z liczb, ile razy obraz stanął i czy ratował go odtwarzacz, czy cały interfejs.
+
+- **Kanał Xtream opisany jako `.m3u8` zagra też jako `.ts`** — gdy serwer ma wyłączone HLS i manifest kanału `/live/` zwraca 404, aplikacja sięga po ten sam strumień jako surowe TS, zamiast kończyć na „format nieobsługiwany”.
+
 ## [3.0.14] — 2026-10-15
 
 ### Zmieniono
