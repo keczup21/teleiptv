@@ -38,7 +38,7 @@
      pamięć aplikacji dzielimy z tekstami playlisty i EPG, a lista bez zapisu
      i tak wczyta się z sieci — tak samo jak dotąd. */
   var CATALOG_MAX_CHARS = 1200000;
-  var APP_VERSION = "3.0.17";
+  var APP_VERSION = "3.0.18";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -4274,10 +4274,13 @@
 
   /* =============================  ODTWARZANIE  ============================= */
 
-  /* maskuje login i hasło w adresie, żeby komunikat można było bezpiecznie pokazać */
+  /* maskuje host (IP/domenę), login, hasło i id strumienia, żeby komunikat można
+     było bezpiecznie pokazać albo wysłać jako zrzut — zostaje schemat, port
+     i rozszerzenie, które są potrzebne do diagnozy. */
   function maskUrl(url) {
     return String(url || "")
-      .replace(/(\/(?:live|movie|series|timeshift)\/)[^/]+\/[^/]+\//i, "$1****/****/")
+      .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/:]+/i, "$1***")
+      .replace(/(\/(?:live|movie|series|timeshift)\/)[^/]+\/[^/]+\/([^/.?#]+)(\.[^/?#]*)?/i, "$1****/****/***$3")
       .replace(/(username|password)=([^&]*)/gi, "$1=****");
   }
 
