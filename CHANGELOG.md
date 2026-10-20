@@ -24,6 +24,11 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+## [3.0.19] — 2026-10-20
+
+### Poprawiono
+- **Diagnostykę można przewijać do końca** — log nie wraca już sam na początek przy odświeżaniu (zegar tykał co sekundę i zerował pozycję), więc długi wpis jest w całości czytelny.
+
 ## [3.0.18] — 2026-10-20
 
 ### Zmieniono

@@ -4039,6 +4039,10 @@ check("panel ma wlasne klawisze: strzalki przewijaja tresc, zamiast zmieniac kan
   src.indexOf("event.stopImmediatePropagation();\n      diagScroll(") > 0 &&
   src.indexOf("if (text) text.scrollTop += direction * 80;") > 0);
 
+check("diagnostyka nie zrzuca przewiniecia przy odswiezaniu (zegar tyka co sekunde)",
+  src.indexOf("var atBottom = text.scrollTop + text.clientHeight >= text.scrollHeight - 4;") > 0 &&
+  src.indexOf("text.scrollTop = atBottom ? text.scrollHeight : top;") > 0);
+
 check("diagnostyka mowi to samo po polsku i po angielsku",
   src.indexOf('diag_title: "Diagnostyka obrazu"') > 0 &&
   src.indexOf('diag_title: "Picture diagnostics"') > 0 &&

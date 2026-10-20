@@ -38,7 +38,7 @@
      pamięć aplikacji dzielimy z tekstami playlisty i EPG, a lista bez zapisu
      i tak wczyta się z sieci — tak samo jak dotąd. */
   var CATALOG_MAX_CHARS = 1200000;
-  var APP_VERSION = "3.0.18";
+  var APP_VERSION = "3.0.19";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -4983,7 +4983,14 @@
     var value = diagText();
     if (value === diagShown) return;      /* nic się nie zmieniło — bez przerysowań */
     diagShown = value;
+    /* Zegar w nagłówku tyka co sekundę, więc treść co sekundę się zmienia;
+       zwykłe podstawienie tekstu zrzucałoby przewinięcie na samą górę i długi
+       log byłby ucięty. Trzymaj pozycję, a przy dopisywaniu zdarzeń (dół)
+       zostań przy dole, żeby świeże wiersze nie uciekały sprzed oczu. */
+    var atBottom = text.scrollTop + text.clientHeight >= text.scrollHeight - 4;
+    var top = text.scrollTop;
     text.textContent = value;
+    text.scrollTop = atBottom ? text.scrollHeight : top;
   }
 
   function startDiagTicker() {
