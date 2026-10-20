@@ -38,7 +38,7 @@
      pamięć aplikacji dzielimy z tekstami playlisty i EPG, a lista bez zapisu
      i tak wczyta się z sieci — tak samo jak dotąd. */
   var CATALOG_MAX_CHARS = 1200000;
-  var APP_VERSION = "3.0.16";
+  var APP_VERSION = "3.0.17";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -1501,6 +1501,7 @@
     p.xtreamServer = p.xtreamServer || "";
     p.xtreamUser = p.xtreamUser || "";
     p.xtreamPass = p.xtreamPass || "";
+    p.xtreamStreamServer = p.xtreamStreamServer || "";
     p.epgUrl = p.epgUrl || "";
     p.epgFileText = p.epgFileText || "";
     p.epgFileName = p.epgFileName || "";
@@ -2002,6 +2003,21 @@
     if (!server) return "";
     if (!/^https?:\/\//i.test(server)) server = "http://" + server;
     return server;
+  }
+
+  /* Serwer strumieni Xtream bywa inny niż adres panelu. Panel zwraca w polu
+     server_info, gdzie naprawdę stoją strumienie (url, port, https_port,
+     server_protocol) — budowanie adresu kanału z adresu panelu kończyło się
+     HTTP 404 na każdym kanale, choć logowanie i lista kanałów działały. */
+  function xtreamStreamBase(serverInfo) {
+    var info = serverInfo || {};
+    var host = String(info.url || "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    if (!host) return "";
+    var protocol = String(info.server_protocol || "http").toLowerCase();
+    if (protocol !== "http" && protocol !== "https") protocol = "http";
+    var port = String((protocol === "https" ? info.https_port : info.port) || "").trim();
+    if (port && !/:\d{1,5}$/.test(host)) host += ":" + port;
+    return protocol + "://" + host;
   }
 
   function xtreamEndpoint(profile, extra) {
@@ -2683,7 +2699,7 @@
   /* =============================  XTREAM CODES  ============================= */
 
   function xtreamStreamUrl(profile, stream) {
-    var server = normalizeServer(profile.xtreamServer);
+    var server = profile.xtreamStreamServer || normalizeServer(profile.xtreamServer);
     var user = encodeURIComponent(profile.xtreamUser || "");
     var pass = encodeURIComponent(profile.xtreamPass || "");
     var ext = String(stream.container_extension || "ts").replace(/^\./, "") || "ts";
@@ -2714,6 +2730,11 @@
       }
       if (userInfo.status && String(userInfo.status).toLowerCase() !== "active") {
         throw new Error("Xtream: konto nieaktywne (" + userInfo.status + "). Sprawdź datę ważności.");
+      }
+      var streamBase = xtreamStreamBase(info && info.server_info);
+      if (streamBase && profile.xtreamStreamServer !== streamBase) {
+        profile.xtreamStreamServer = streamBase;
+        saveSettings();
       }
       return fetchJson(xtreamEndpoint(profile, "action=get_live_categories"));
     }).then(function (data) {
