@@ -4295,6 +4295,26 @@ check("warstwe obrazu na Androidzie zweza most setVideoSplit",
   java.indexOf("private void applyVideoSplit(boolean on)") > 0 &&
   javaVlc.indexOf("void setSplit(boolean on)") > 0);
 
+/* --- 32. maskowanie adresu serwera w diagnostyce --------------------------
+   maskUrl() chowa host (IP/domenę), login, hasło i id kanału, żeby log można
+   było bezpiecznie pokazać/wysłać; zostaje schemat, port i rozszerzenie, bo
+   po nich widać, gdzie szedł strumień. */
+{
+  const maskStart = src.indexOf("function maskUrl(");
+  const maskEnd = src.indexOf("function playbackDetails(");
+  if (maskStart < 0 || maskEnd < 0) throw new Error("Nie znalazlem maskUrl w app.js");
+  const maskBox = run(src.slice(maskStart, maskEnd), {});
+  check("maskUrl: host (IP) schowany, zostaje schemat i port",
+    maskBox.maskUrl("http://123.45.67.89:80/live/user/pass/12345.m3u8") === "http://***:80/live/****/****/***.m3u8",
+    maskBox.maskUrl("http://123.45.67.89:80/live/user/pass/12345.m3u8"));
+  check("maskUrl: domena, login i haslo schowane",
+    maskBox.maskUrl("https://stream.example.com:8080/live/u/p/9.ts") === "https://***:8080/live/****/****/***.ts",
+    maskBox.maskUrl("https://stream.example.com:8080/live/u/p/9.ts"));
+  check("maskUrl: username/password w zapytaniu schowane",
+    maskBox.maskUrl("http://h/x.m3u?username=a&password=b") === "http://***/x.m3u?username=****&password=****",
+    maskBox.maskUrl("http://h/x.m3u?username=a&password=b"));
+}
+
 console.log("");
 if (fails) { console.log("BLEDY: " + fails); process.exit(1); }
 console.log("Wszystkie sprawdzenia przeszly.");
