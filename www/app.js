@@ -38,7 +38,7 @@
      pamięć aplikacji dzielimy z tekstami playlisty i EPG, a lista bez zapisu
      i tak wczyta się z sieci — tak samo jak dotąd. */
   var CATALOG_MAX_CHARS = 1200000;
-  var APP_VERSION = "3.0.20";
+  var APP_VERSION = "3.0.21";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -6688,6 +6688,15 @@
     if (tsUrl !== primaryUrl && /\/live\//i.test(primaryUrl.split("#")[0].split("?")[0])) {
       browser.push({ engine: "native", url: tsUrl });
       browser.push({ engine: "mse", url: tsUrl });
+    }
+
+    /* Starszy format Xtream Codes: strumień bez trasy /live/, czyli
+       /<user>/<pass>/<id>.ts. Panel bez obsługi live.php (HTTP 404 na każdym
+       adresie /live/…) wciąż serwuje ten adres — czytnik MSE (mpegts.js)
+       rozbierze surowy TS. */
+    var directUrl = primaryUrl.replace(/\/live\//i, "/").replace(/\.(m3u8|ts)(\?.*)?$/i, ".ts$2");
+    if (directUrl !== primaryUrl && /\/live\//i.test(primaryUrl.split("#")[0].split("?")[0])) {
+      browser.push({ engine: "mse", url: directUrl });
     }
 
     /* Drogi sprzętowe stają na CZELE kolejki — i na kanale na żywo, i w nagraniu

@@ -2508,11 +2508,12 @@ queueBox.settings.engineHint = "";
    na „format nieobsługiwany”. Adres Xtream (/live/<user>/<pass>/<id>) dostaje
    więc te same drogi pod .ts, żeby kanał grał mimo wyłączonego HLS. */
 const qXtreamM3u8 = queueBox.buildSourceQueue("http://s:8080/live/u/p/12345.m3u8");
-check("uruchomione: kanal Xtream .m3u8 dostaje zapasowy .ts (serwer bez HLS)",
-  qXtreamM3u8.map(function (e) { return e.engine; }).join(",") === "native,hls,mse,native,mse" &&
+check("uruchomione: kanal Xtream .m3u8 dostaje zapasowy .ts i adres bez /live/",
+  qXtreamM3u8.map(function (e) { return e.engine; }).join(",") === "native,hls,mse,native,mse,mse" &&
   qXtreamM3u8[3].url === "http://s:8080/live/u/p/12345.ts" &&
   qXtreamM3u8[4].url === "http://s:8080/live/u/p/12345.ts" &&
-  qXtreamM3u8[3].hls !== true && qXtreamM3u8[4].hls !== true,
+  qXtreamM3u8[5].url === "http://s:8080/u/p/12345.ts" &&
+  qXtreamM3u8[3].hls !== true && qXtreamM3u8[4].hls !== true && qXtreamM3u8[5].hls !== true,
   JSON.stringify(qXtreamM3u8.map(function (e) { return e.engine + ":" + e.url; })));
 check("uruchomione: zwykly .m3u8 spoza /live/ nie dostaje zmyślonego .ts",
   engines("http://s/y.m3u8").join(",") === "native,hls,mse",

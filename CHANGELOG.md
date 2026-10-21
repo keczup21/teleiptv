@@ -24,6 +24,11 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+## [3.0.21] — 2026-10-21
+
+### Poprawiono
+- **Kanały Xtream z panelem bez trasy `/live/` mają zapasowy adres** — gdy `/live/<user>/<pass>/<id>.m3u8` i `.ts` zwracają 404, apka sięga po stary format Xtream Codes `/user/pass/id.ts` przez mpegts.js (MSE).
+
 ## [3.0.20] — 2026-10-20
 
 ### Poprawiono
