@@ -1352,7 +1352,7 @@ body.uimode-touch .guide-channel span { font-size: 17px; }
 }
 .diag-title { margin: 0 0 10px; font-size: 26px; font-weight: 700; }
 
-/* wydruk do zdjęcia: tekst równy, bez zawijania, przewijany w pionie —
+/* wydruk do zdjęcia: tekst z zawijaniem długich linii, przewijany w pionie —
    ▲ ▼ przewijają treść (patrz diagScroll w app.js) */
 .diag-text {
   flex: 1 1 auto;
@@ -1363,7 +1363,8 @@ body.uimode-touch .guide-channel span { font-size: 17px; }
   font-family: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
   font-size: 16px;
   line-height: 1.45;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
   color: var(--text);
   background: var(--surface-2);
   border-radius: 12px;
@@ -1377,9 +1378,7 @@ body.uimode-tv .diag-title { font-size: 30px; }
 body.uimode-tv .diag-text { font-size: 19px; line-height: 1.5; }
 body.uimode-tv .diag-hint { font-size: 17px; }
 
-/* na dotykowym ekranie panel zostaje przewijany palcem — treść nie może
-   wychodzić poza kartę (przy `white-space: pre` szeroka linia przewija się
-   w bok, a nie łamie) */
+/* na dotykowym ekranie panel zostaje przewijany palcem */
 body.uimode-touch .diag-text { overflow: auto; }
 
 /* ==========================================================================

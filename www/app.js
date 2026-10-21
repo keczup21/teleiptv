@@ -38,7 +38,7 @@
      pamięć aplikacji dzielimy z tekstami playlisty i EPG, a lista bez zapisu
      i tak wczyta się z sieci — tak samo jak dotąd. */
   var CATALOG_MAX_CHARS = 1200000;
-  var APP_VERSION = "3.0.19";
+  var APP_VERSION = "3.0.20";
   var SCHEMA_VERSION = 5;
 
   /* „Ostatnio oglądane”: kanał trafia na listę po 10 s oglądania,
@@ -4612,7 +4612,7 @@
      Treść jest do zdjęcia telefonem: w telewizorze nie ma schowka ani pliku,
      do którego można by zajrzeć. */
 
-  var DIAG_LOG_MAX = 14;           /* ile ostatnich zdarzeń <video> pamiętamy */
+  var DIAG_LOG_MAX = 200;          /* ile zdarzeń trzymamy w dzienniku — cała historia błędu ma być widoczna */
   var DIAG_PROBE_TIMEOUT = 8000;   /* ile czekamy na manifest HLS */
 
   var diagEvents = [];         /* { at: ms, label: „…” } — najnowsze na końcu */

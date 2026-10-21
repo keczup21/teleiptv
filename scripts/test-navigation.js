@@ -4043,6 +4043,13 @@ check("diagnostyka nie zrzuca przewiniecia przy odswiezaniu (zegar tyka co sekun
   src.indexOf("var atBottom = text.scrollTop + text.clientHeight >= text.scrollHeight - 4;") > 0 &&
   src.indexOf("text.scrollTop = atBottom ? text.scrollHeight : top;") > 0);
 
+check("dziennik zdarzen trzyma cala historie błędu (nie tylko ostatnie 14 wpisów)",
+  src.indexOf("var DIAG_LOG_MAX = 200;") > 0);
+
+check("długie linie w diagnostyce zawijają się, a nie ucinają na krawędzi okna",
+  css.indexOf("white-space: pre-wrap;") > 0 &&
+  css.indexOf("overflow-wrap: break-word;") > 0);
+
 check("diagnostyka mowi to samo po polsku i po angielsku",
   src.indexOf('diag_title: "Diagnostyka obrazu"') > 0 &&
   src.indexOf('diag_title: "Picture diagnostics"') > 0 &&
