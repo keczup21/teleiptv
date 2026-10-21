@@ -24,6 +24,13 @@ wydania ani porządków w kodzie, nie powtarzamy zmian z wcześniejszych wersji
 i nie odnotowujemy samego podbicia numeru (miejsca z numerem opisuje akapit
 wyżej). Opis wydania na GitHubie powstaje z tego wpisu: `npm run notes`
 (`scripts/release-notes.js`) bierze z changeloga tylko sekcję wydawanej wersji.
+## [3.0.22] — 2026-10-21
+
+### Poprawiono
+- **Ręczny adres serwera strumieni w ustawieniach Xtream** — gdy panel nie podaje w `server_info`, gdzie stoją kanały (i te wracają z 404), można wpisać adres samemu.
+- **Panel z samym portem bez adresu strumieni** — apka buduje wtedy adres z hosta panelu i tego portu.
+- **Log diagnostyczny maskuje też stary format Xtream bez trasy `/live/`** — login i hasło nie wyciekają do dziennika.
+
 ## [3.0.21] — 2026-10-21
 
 ### Poprawiono

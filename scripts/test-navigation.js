@@ -4325,6 +4325,23 @@ check("warstwe obrazu na Androidzie zweza most setVideoSplit",
   check("maskUrl: username/password w zapytaniu schowane",
     maskBox.maskUrl("http://h/x.m3u?username=a&password=b") === "http://***/x.m3u?username=****&password=****",
     maskBox.maskUrl("http://h/x.m3u?username=a&password=b"));
+  check("maskUrl: stary format Xtream bez /live/ tez chowa login i haslo",
+    maskBox.maskUrl("https://host:443/user/pass/494.ts") === "https://***:443/****/****/***.ts",
+    maskBox.maskUrl("https://host:443/user/pass/494.ts"));
+}
+
+/* --- 33. server_info: host strumieni z portem, gdy panel nie podał url ------- */
+{
+  const baseStart = src.indexOf("function xtreamStreamBase(");
+  const baseEnd = src.indexOf("function xtreamEndpoint(");
+  if (baseStart < 0 || baseEnd < 0) throw new Error("Nie znalazlem xtreamStreamBase w app.js");
+  const baseBox = run(src.slice(baseStart, baseEnd), {});
+  check("xtreamStreamBase: brak url, ale port + adres panelu -> host panelu na porcie",
+    baseBox.xtreamStreamBase({ port: "8080" }, "http://host:80") === "http://host:8080",
+    baseBox.xtreamStreamBase({ port: "8080" }, "http://host:80"));
+  check("xtreamStreamBase: brak url i portu -> pusty adres (kanaly przy adresie panelu)",
+    baseBox.xtreamStreamBase({}, "http://host:80") === "",
+    baseBox.xtreamStreamBase({}, "http://host:80"));
 }
 
 console.log("");
